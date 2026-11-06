@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Android Auto-Editor</string>
+    <string name="title_activity_main">Android Auto-Editor</string>
+    <string name="package_name">com.genshin.abyssstudio</string>
+    <string name="custom_url_scheme">com.genshin.abyssstudio</string>
+</resources>

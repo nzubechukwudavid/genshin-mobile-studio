@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Cpu, Zap, RefreshCw, Smartphone, Download } from 'lucide-react';
+import { Cpu, Zap, RefreshCw, Smartphone, Download, ShieldCheck } from 'lucide-react';
+import { checkAndRequestShizuku } from '../services/nativeBridge';
 
 interface TopHeaderProps {
   shizukuActive: boolean;
@@ -58,7 +59,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
         </div>
         <div>
           <h1 className="text-sm font-extrabold text-white tracking-tight leading-none">
-            Android Auto-Editor
+            Genshin Mobile Studio
           </h1>
           <p className="text-[10px] text-slate-400 font-medium mt-0.5">
             Xiaomi 13T Pro · Dimensity 9200+
@@ -81,16 +82,19 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
         )}
 
         <button
-          onClick={onToggleShizuku}
+          onClick={async () => {
+            await checkAndRequestShizuku();
+            onToggleShizuku();
+          }}
           className={`px-2.5 py-1 rounded-xl border text-[11px] font-bold flex items-center gap-1 transition-all ${
             shizukuActive
               ? 'bg-[#00E5FF]/10 border-[#00E5FF] text-[#00E5FF]'
               : 'bg-[#151A23] border-[#232B38] text-slate-400 hover:text-white'
           }`}
-          title="Toggle Shizuku ADB Daemon Access"
+          title="Connect to Shizuku System Service"
         >
           <Zap className={`w-3 h-3 ${shizukuActive ? 'fill-[#00E5FF]' : ''}`} />
-          {shizukuActive ? 'Shizuku ADB' : 'Standard SAF'}
+          {shizukuActive ? 'Shizuku Active' : 'Enable Shizuku'}
         </button>
 
         <button

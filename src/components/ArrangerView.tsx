@@ -1,6 +1,7 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { ClipSlot, RawRecording, EditingMode, StygianTopology } from '../types';
 import { formatTimeMMSS, extractVideoMetadata } from '../services/trimmerEngine';
+import { autoScanRecordings, isNativeAndroid } from '../services/nativeBridge';
 import { 
   Play, 
   Trash2, 
@@ -55,11 +56,32 @@ export const ArrangerView: React.FC<ArrangerViewProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Trigger native Android file picker for screen recordings
-  const handleOpenPicker = () => {
-    if (fileInputRef.current) {
-      fileInputRef.current.click();
+  // Auto-scan recordings from storage on mount if on native Android
+  useEffect(() => {
+    if (isNativeAndroid && recordings.length === 0) {
+      setIsProcessingFiles(true);
+      autoScanRecordings().then((scanned) => {
+        if (scanned && scanned.length > 0) {
+          onAddRecordings(scanned);
+        }
+        setIsProcessingFiles(false);
+      }).catch(() => setIsProcessingFiles(false));
     }
+  }, []);
+
+  // Trigger storage directory auto-scan or fallback to file picker
+  const handleOpenPicker = async () => {
+    if (isNativeAndroid) {
+      setIsProcessingFiles(true);
+      const scanned = await autoScanRecordings();
+      if (scanned && scanned.length > 0) {
+        onAddRecordings(scanned);
+        setIsProcessingFiles(false);
+        return;
+      }
+      setIsProcessingFiles(false);
+    }
+    fileInputRef.current?.click();
   };
 
   // Process user selected video files from storage

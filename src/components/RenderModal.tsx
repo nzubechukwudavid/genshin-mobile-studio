@@ -1,18 +1,19 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import { ClipSlot } from '../types';
 import { calculateChapters, generateYouTubeDescription } from '../services/chapterGenerator';
 import { formatTimeMMSS } from '../services/trimmerEngine';
+import { saveRenderedVideoToGallery } from '../services/nativeBridge';
 import { 
   CheckCircle2, 
   Download, 
   Copy, 
   Sparkles, 
   Film, 
-  AlertCircle,
-  Play,
-  RotateCcw,
-  Terminal,
-  Volume2
+  AlertCircle, 
+  RotateCcw, 
+  Terminal, 
+  Tv, 
+  FolderCheck 
 } from 'lucide-react';
 
 interface RenderModalProps {
@@ -20,6 +21,8 @@ interface RenderModalProps {
   onClose: () => void;
   shizukuActive: boolean;
 }
+
+export type ExportPreset = 'native' | '2k' | '1080p';
 
 export const RenderModal: React.FC<RenderModalProps> = ({
   slots,
@@ -30,25 +33,42 @@ export const RenderModal: React.FC<RenderModalProps> = ({
   const [renderProgress, setRenderProgress] = useState(0);
   const [currentStep, setCurrentStep] = useState('Ready to assemble');
   const [renderedBlobUrl, setRenderedBlobUrl] = useState<string | null>(null);
+  const [rawOutputBlob, setRawOutputBlob] = useState<Blob | null>(null);
   const [renderedBlobSizeMb, setRenderedBlobSizeMb] = useState<number>(0);
   const [isRenderComplete, setIsRenderComplete] = useState(false);
   const [renderError, setRenderError] = useState<string | null>(null);
   const [copiedDescription, setCopiedDescription] = useState(false);
   const [copiedShizukuCmd, setCopiedShizukuCmd] = useState(false);
 
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Gallery Save State
+  const [isSavingGallery, setIsSavingGallery] = useState(false);
+  const [savedGalleryPath, setSavedGalleryPath] = useState<string | null>(null);
+
+  // Resolution Preset (Defaults to Xiaomi 13T Pro Native 2712x1220 @ 30fps)
+  const [exportPreset, setExportPreset] = useState<ExportPreset>('native');
 
   const validSlots = slots.filter((s) => s.assignedClip !== null);
-  const { chapters, totalDurationSec } = calculateChapters(validSlots);
+  const { totalDurationSec } = calculateChapters(validSlots);
   const fullDescription = generateYouTubeDescription(validSlots);
+
+  const getPresetSpecs = (preset: ExportPreset) => {
+    switch (preset) {
+      case 'native':
+        return { width: 2712, height: 1220, fps: 30, bitrate: 14000000, label: 'Native 1.5K (2712×1220 · 30fps)' };
+      case '2k':
+        return { width: 2560, height: 1152, fps: 30, bitrate: 12000000, label: '2K Master (2560×1152 · 30fps)' };
+      case '1080p':
+        return { width: 1920, height: 864, fps: 30, bitrate: 8000000, label: 'FHD Standard (1920×864 · 30fps)' };
+    }
+  };
+
+  const currentSpecs = getPresetSpecs(exportPreset);
 
   // Generate an exact native FFmpeg script for Shizuku / Termux execution on Xiaomi 13T Pro
   const generateShizukuAdbCommand = () => {
     const lines = [
       '# Genshin Abyss Auto-Editor - Shizuku / ADB Hardware Concat Script',
-      '# Dimensity 9200+ hardware H.264 encoder with SFX (-20dB) & BGM (-30dB) mixing',
+      `# Dimensity 9200+ hardware H.264 encoder (${currentSpecs.label})`,
       'mkdir -p /sdcard/DCIM/GenshinAbyssStudio'
     ];
 
@@ -63,11 +83,11 @@ export const RenderModal: React.FC<RenderModalProps> = ({
         lines.push(
           `ffmpeg -y -ss ${start} -t ${dur} -i "${clip.path}" -i "${bgm.path}" ` +
           `-filter_complex "[0:a]volume=0.10[sfx];[1:a]volume=0.0316,afade=t=out:st=${Math.max(0, slot.effectiveCombatSec - 1.5).toFixed(2)}:d=1.5[bgm];[sfx][bgm]amix=inputs=2[aout]" ` +
-          `-map 0:v -map "[aout]" -c:v h264_mediacodec -b:v 16M -r 60 -c:a aac -b:a 192k "${outPart}"`
+          `-map 0:v -map "[aout]" -c:v h264_mediacodec -b:v 14M -r 30 -c:a aac -b:a 192k "${outPart}"`
         );
       } else {
         lines.push(
-          `ffmpeg -y -ss ${start} -t ${dur} -i "${clip.path}" -af "volume=0.10" -c:v h264_mediacodec -b:v 16M -r 60 -c:a aac "${outPart}"`
+          `ffmpeg -y -ss ${start} -t ${dur} -i "${clip.path}" -af "volume=0.10" -c:v h264_mediacodec -b:v 14M -r 30 -c:a aac "${outPart}"`
         );
       }
     });
@@ -80,15 +100,15 @@ export const RenderModal: React.FC<RenderModalProps> = ({
     });
     lines.push('EOF');
     lines.push(
-      'ffmpeg -y -f concat -safe 0 -i /sdcard/DCIM/GenshinAbyssStudio/concat.txt -c copy /sdcard/DCIM/GenshinAbyssStudio/Abyss_Floor12_36Star_Finished.mp4'
+      'ffmpeg -y -f concat -safe 0 -i /sdcard/DCIM/GenshinAbyssStudio/concat.txt -c copy /sdcard/DCIM/GenshinAbyssStudio/Abyss_Floor12_Finished.mp4'
     );
-    lines.push('echo "✅ Render complete! Output: /sdcard/DCIM/GenshinAbyssStudio/Abyss_Floor12_36Star_Finished.mp4"');
+    lines.push('echo "✅ Render complete! Output: /sdcard/DCIM/GenshinAbyssStudio/Abyss_Floor12_Finished.mp4"');
     return lines.join('\n');
   };
 
   const shizukuScript = generateShizukuAdbCommand();
 
-  // Run Real In-App Video & Audio Assembly via MediaRecorder / Web Audio
+  // Run Real In-App Video & Audio Assembly
   const startRealAssembly = async () => {
     if (validSlots.length === 0) {
       setRenderError('No video clips assigned. Please assign takes to at least 1 chamber slot.');
@@ -98,12 +118,13 @@ export const RenderModal: React.FC<RenderModalProps> = ({
     try {
       setIsRendering(true);
       setRenderError(null);
+      setSavedGalleryPath(null);
       setRenderProgress(0);
-      setCurrentStep('Initializing audio mixer & canvas...');
+      setCurrentStep(`Initializing ${currentSpecs.label} canvas...`);
 
       const canvas = document.createElement('canvas');
-      canvas.width = 1920;
-      canvas.height = 1080;
+      canvas.width = currentSpecs.width;
+      canvas.height = currentSpecs.height;
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error('Could not initialize 2D canvas context');
 
@@ -111,7 +132,7 @@ export const RenderModal: React.FC<RenderModalProps> = ({
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       const dest = audioCtx.createMediaStreamDestination();
 
-      const canvasStream = canvas.captureStream(60);
+      const canvasStream = canvas.captureStream(currentSpecs.fps);
       const audioTracks = dest.stream.getAudioTracks();
       if (audioTracks.length > 0) {
         canvasStream.addTrack(audioTracks[0]);
@@ -129,7 +150,7 @@ export const RenderModal: React.FC<RenderModalProps> = ({
 
       const recorder = new MediaRecorder(canvasStream, {
         mimeType,
-        videoBitsPerSecond: 16000000 // 16 Mbps high-bitrate 1080p
+        videoBitsPerSecond: currentSpecs.bitrate
       });
 
       const chunks: Blob[] = [];
@@ -139,6 +160,7 @@ export const RenderModal: React.FC<RenderModalProps> = ({
 
       recorder.onstop = () => {
         const outputBlob = new Blob(chunks, { type: mimeType });
+        setRawOutputBlob(outputBlob);
         const url = URL.createObjectURL(outputBlob);
         setRenderedBlobUrl(url);
         setRenderedBlobSizeMb(Math.round((outputBlob.size / (1024 * 1024)) * 10) / 10);
@@ -242,7 +264,6 @@ export const RenderModal: React.FC<RenderModalProps> = ({
         try {
           await video.play();
         } catch {
-          // If unmuted playback was blocked by browser policy, mute and play
           video.muted = true;
           await video.play().catch(() => {});
         }
@@ -281,7 +302,7 @@ export const RenderModal: React.FC<RenderModalProps> = ({
               return;
             }
 
-            // Draw video to canvas (cover 1920x1080)
+            // Draw video to canvas (cover 20:9 display)
             ctx.fillStyle = '#000000';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -306,12 +327,10 @@ export const RenderModal: React.FC<RenderModalProps> = ({
 
             // Apply 0.5s Black Fade Transitions
             if (elapsed < 0.5) {
-              // Fade in from black
               const fadeAlpha = 1.0 - elapsed / 0.5;
               ctx.fillStyle = `rgba(0, 0, 0, ${fadeAlpha})`;
               ctx.fillRect(0, 0, canvas.width, canvas.height);
             } else if (elapsed > segmentDuration - 0.5) {
-              // Fade out to black
               const fadeAlpha = (elapsed - (segmentDuration - 0.5)) / 0.5;
               ctx.fillStyle = `rgba(0, 0, 0, ${fadeAlpha})`;
               ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -352,7 +371,21 @@ export const RenderModal: React.FC<RenderModalProps> = ({
       recorder.stop();
     } catch (err: any) {
       setIsRendering(false);
-      setRenderError(err.message || 'Render failed. Check video format or browser permissions.');
+      setRenderError(err.message || 'Render failed. Check video format or storage permissions.');
+    }
+  };
+
+  const handleSaveToGallery = async () => {
+    if (!rawOutputBlob) return;
+    try {
+      setIsSavingGallery(true);
+      const filename = `Abyss_Floor12_${exportPreset.toUpperCase()}_Showcase.mp4`;
+      const savedPath = await saveRenderedVideoToGallery(rawOutputBlob, filename);
+      setSavedGalleryPath(savedPath);
+      setIsSavingGallery(false);
+    } catch (err: any) {
+      setIsSavingGallery(false);
+      setRenderError(`Failed to save to Gallery: ${err.message || err}`);
     }
   };
 
@@ -375,7 +408,7 @@ export const RenderModal: React.FC<RenderModalProps> = ({
         <div className="p-4 border-b border-[#232B38] flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Film className="w-4 h-4 text-[#FED662]" />
-            <h3 className="text-sm font-bold text-white">1080p 60fps Video Assembly</h3>
+            <h3 className="text-sm font-bold text-white">Video Assembly & Master Export</h3>
           </div>
           <button
             onClick={onClose}
@@ -386,6 +419,56 @@ export const RenderModal: React.FC<RenderModalProps> = ({
         </div>
 
         <div className="p-4 flex flex-col gap-4 overflow-y-auto">
+          {/* Resolution Preset Selector */}
+          <div className="bg-[#0B0E14] rounded-2xl p-3 border border-[#232B38] flex flex-col gap-2">
+            <div className="flex items-center justify-between text-xs font-bold text-slate-300">
+              <span className="flex items-center gap-1.5">
+                <Tv className="w-3.5 h-3.5 text-[#FED662]" />
+                Export Profile (30fps 20:9 Aspect)
+              </span>
+              <span className="text-[10px] text-[#00E5FF] font-mono">{currentSpecs.label}</span>
+            </div>
+
+            <div className="grid grid-cols-3 gap-1.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setExportPreset('native')}
+                disabled={isRendering}
+                className={`py-2 px-1 rounded-xl text-[11px] font-bold border transition-all ${
+                  exportPreset === 'native'
+                    ? 'bg-[#FED662]/10 border-[#FED662] text-[#FED662]'
+                    : 'bg-[#151A23] border-[#232B38] text-slate-400 hover:text-white'
+                }`}
+              >
+                1.5K Native
+              </button>
+              <button
+                type="button"
+                onClick={() => setExportPreset('2k')}
+                disabled={isRendering}
+                className={`py-2 px-1 rounded-xl text-[11px] font-bold border transition-all ${
+                  exportPreset === '2k'
+                    ? 'bg-[#FED662]/10 border-[#FED662] text-[#FED662]'
+                    : 'bg-[#151A23] border-[#232B38] text-slate-400 hover:text-white'
+                }`}
+              >
+                2K Master
+              </button>
+              <button
+                type="button"
+                onClick={() => setExportPreset('1080p')}
+                disabled={isRendering}
+                className={`py-2 px-1 rounded-xl text-[11px] font-bold border transition-all ${
+                  exportPreset === '1080p'
+                    ? 'bg-[#FED662]/10 border-[#FED662] text-[#FED662]'
+                    : 'bg-[#151A23] border-[#232B38] text-slate-400 hover:text-white'
+                }`}
+              >
+                FHD Standard
+              </button>
+            </div>
+          </div>
+
           {/* Timeline Summary Card */}
           <div className="bg-[#0B0E14] rounded-2xl p-4 border border-[#232B38] flex flex-col gap-2">
             <div className="flex items-center justify-between text-xs font-bold text-white">
@@ -427,7 +510,7 @@ export const RenderModal: React.FC<RenderModalProps> = ({
                     />
                   </div>
                   <div className="text-[10px] text-slate-500 text-center">
-                    Encoding 1080p 60fps frames with dual-track audio normalization...
+                    Encoding {currentSpecs.label} with dual audio normalization...
                   </div>
                 </div>
               ) : (
@@ -437,7 +520,7 @@ export const RenderModal: React.FC<RenderModalProps> = ({
                   className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-[#FED662] via-[#FFA000] to-[#FF6B00] text-[#0B0E14] font-black text-sm tracking-wide shadow-xl shadow-[#FED662]/10 hover:brightness-110 active:scale-[0.98] transition-all disabled:opacity-40 flex items-center justify-center gap-2"
                 >
                   <Sparkles className="w-4 h-4 fill-[#0B0E14]" />
-                  <span>START 1080p 60fps ASSEMBLY</span>
+                  <span>START {currentSpecs.width}×{currentSpecs.height} ASSEMBLY</span>
                 </button>
               )}
 
@@ -458,27 +541,36 @@ export const RenderModal: React.FC<RenderModalProps> = ({
                       Finished Video Ready ({renderedBlobSizeMb} MB)
                     </div>
                     <div className="text-[10px] text-emerald-400/80 font-mono">
-                      1080p 60fps · Dual Normalization (-20dB SFX, -30dB BGM)
+                      {currentSpecs.label} · Dual Normalization (-20dB SFX, -30dB BGM)
                     </div>
                   </div>
                 </div>
 
-                {renderedBlobUrl && (
-                  <a
-                    href={renderedBlobUrl}
-                    download="Abyss_Floor12_36Star_Showcase.mp4"
-                    className="px-4 py-2 rounded-xl bg-emerald-500 text-[#0B0E14] text-xs font-black shadow-md hover:brightness-110 flex items-center gap-1.5"
-                  >
-                    <Download className="w-4 h-4" />
-                    Download MP4
-                  </a>
-                )}
+                <button
+                  onClick={handleSaveToGallery}
+                  disabled={isSavingGallery}
+                  className="px-4 py-2.5 rounded-xl bg-emerald-500 text-[#0B0E14] text-xs font-black shadow-md hover:brightness-110 flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>
+                    {isSavingGallery ? 'Saving...' : savedGalleryPath ? 'Saved to Gallery!' : 'Save to Gallery'}
+                  </span>
+                </button>
               </div>
+
+              {savedGalleryPath && (
+                <div className="p-3 rounded-xl bg-[#0B0E14] border border-emerald-500/40 text-[11px] text-emerald-300 flex items-center gap-2">
+                  <FolderCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span className="font-mono break-all">{savedGalleryPath}</span>
+                </div>
+              )}
 
               <button
                 onClick={() => {
                   setIsRenderComplete(false);
                   setRenderedBlobUrl(null);
+                  setRawOutputBlob(null);
+                  setSavedGalleryPath(null);
                   startRealAssembly();
                 }}
                 className="py-2 rounded-xl bg-[#232B38] text-slate-300 text-xs font-semibold hover:text-white flex items-center justify-center gap-1.5"
@@ -517,13 +609,13 @@ export const RenderModal: React.FC<RenderModalProps> = ({
                   <Terminal className="w-3.5 h-3.5 text-[#00E5FF]" />
                   <span className="text-xs font-bold text-white">Shizuku Hardware Script</span>
                   <span className="text-[9px] px-1.5 py-0.2 rounded bg-[#00E5FF]/20 text-[#00E5FF] font-bold">
-                    ADB Direct
+                    Dimensity 9200+
                   </span>
                 </div>
 
                 <button
                   onClick={handleCopyShizukuScript}
-                  className="px-2 py-1 rounded bg-[#232B38] text-[11px] font-semibold text-[#00E5FF] hover:bg-[#2C3646] flex items-center gap-1"
+                  className="px-2.5 py-1 rounded bg-[#232B38] text-[11px] font-semibold text-[#00E5FF] hover:bg-[#2C3646] flex items-center gap-1"
                 >
                   <Copy className="w-3 h-3" />
                   {copiedShizukuCmd ? 'Copied Script!' : 'Copy Script'}
@@ -531,7 +623,7 @@ export const RenderModal: React.FC<RenderModalProps> = ({
               </div>
 
               <p className="text-[10px] text-slate-400">
-                Execute directly in Shizuku Shell / Termux to utilize the Dimensity 9200+ hardware MediaCodec encoder at 12x real-time speed.
+                Execute directly in Shizuku Shell / Termux to utilize your Xiaomi 13T Pro's Dimensity 9200+ hardware MediaCodec encoder at 12x real-time speed.
               </p>
             </div>
           )}

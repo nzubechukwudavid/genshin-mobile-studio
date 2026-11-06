@@ -1,8 +1,9 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { BgmTrack } from '../types';
 import { formatTimeMMSS } from '../services/trimmerEngine';
 import { extractAudioMetadata } from '../services/musicRecommender';
-import { Music, Play, Pause, Folder, Plus, Volume2, Upload, Trash2, FolderOpen } from 'lucide-react';
+import { autoScanMusic, isNativeAndroid } from '../services/nativeBridge';
+import { Music, Play, Pause, Folder, Plus, Volume2, Upload, Trash2, FolderOpen, RefreshCw } from 'lucide-react';
 
 interface BgmManagerViewProps {
   tracks: BgmTrack[];
@@ -22,6 +23,32 @@ export const BgmManagerView: React.FC<BgmManagerViewProps> = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Auto-scan /sdcard/Music on mount if on native Android
+  useEffect(() => {
+    if (isNativeAndroid && tracks.length === 0) {
+      setIsProcessing(true);
+      autoScanMusic().then((scanned) => {
+        if (scanned && scanned.length > 0) {
+          onAddTracks(scanned);
+        }
+        setIsProcessing(false);
+      }).catch(() => setIsProcessing(false));
+    }
+  }, []);
+
+  const handleScanMusicFolder = async () => {
+    if (isNativeAndroid) {
+      setIsProcessing(true);
+      const scanned = await autoScanMusic('/sdcard/Music');
+      if (scanned && scanned.length > 0) {
+        onAddTracks(scanned);
+      }
+      setIsProcessing(false);
+      return;
+    }
+    fileInputRef.current?.click();
+  };
 
   // Extract unique subfolders
   const folders = ['all', ...Array.from(new Set(tracks.map((t) => t.folder)))];
@@ -131,12 +158,12 @@ export const BgmManagerView: React.FC<BgmManagerViewProps> = ({
               <span>Select Files</span>
             </button>
             <button
-              onClick={() => folderInputRef.current?.click()}
+              onClick={handleScanMusicFolder}
               disabled={isProcessing}
               className="px-3 py-1.5 rounded-xl bg-[#FED662] text-[#0B0E14] text-xs font-black hover:brightness-110 flex items-center gap-1.5"
             >
               <FolderOpen className="w-3.5 h-3.5" />
-              <span>Import Folder</span>
+              <span>{isProcessing ? 'Scanning...' : 'Scan /sdcard/Music'}</span>
             </button>
           </div>
         </div>
