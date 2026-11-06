@@ -1,9 +1,19 @@
-name: Build Android APK
+name: Build & Release Android APK
 
 on:
   push:
     branches: [ main ]
+    tags:
+      - 'v*'
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag (e.g. v1.0.0)'
+        required: false
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -32,7 +42,7 @@ jobs:
         run: |
           npm install --legacy-peer-deps @capacitor/core @capacitor/cli @capacitor/android
           rm -f capacitor.config.ts
-          npx cap add android
+          [ -d "android" ] || npx cap add android
           npx cap sync android
           node scripts/configure-android.js
 
@@ -43,8 +53,49 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
+      - name: Prepare Release APK Asset
+        run: |
+          VERSION="v1.0.0"
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref_name }}"
+          elif [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            VERSION="${{ github.event.inputs.tag_name }}"
+          fi
+          cp android/app/build/outputs/apk/debug/app-debug.apk "GenshinMobileStudio-${VERSION}.apk"
+          echo "RELEASE_TAG=${VERSION}" >> $GITHUB_ENV
+
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: AndroidAutoEditor-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Create GitHub Release and Upload APK
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Genshin Mobile Studio ${{ env.RELEASE_TAG }}
+          draft: false
+          prerelease: false
+          make_latest: true
+          generate_release_notes: true
+          files: |
+            GenshinMobileStudio-*.apk
+          body: |
+            ## 📱 Genshin Mobile Studio - Android APK Release
+
+            Direct mobile installation of Genshin Mobile Studio.
+
+            ### 🚀 Quick Start on Mobile:
+            1. Download the **`GenshinMobileStudio-${{ env.RELEASE_TAG }}.apk`** file below directly on your Android phone.
+            2. Open the downloaded file to install (allow "Install unknown apps" if prompted).
+            3. Open the app and start assembling your Abyss & Stygian showcases!
+
+            ---
+            ### ✨ What's Included:
+            - **On-Device Arranger**: Select and order Floor 12 takes (12-1, 12-2, 12-3, Showcase, Stygian 3-Boss).
+            - **Intelligent Trimming**: Automated load screen trimming, 3-2-1 countdown entry point sync, and victory freeze preservation.
+            - **Soundtrack Engine**: Chamber-to-BGM duration fitness matching and automatic audio balancing (-20dB SFX, -30dB BGM).
+            - **Xiaomi 13T Pro Fast Path**: High-speed Dimensity 9200+ hardware MediaCodec concatenation script for Shizuku / Termux.
+            - **YouTube Timecodes**: 1-tap chapter and track credit sync.

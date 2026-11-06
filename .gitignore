@@ -1,8 +1,10 @@
 node_modules/
 build/
 dist/
+android/
 coverage/
 .DS_Store
 *.log
+test_mobile_*.png
 .env*
 !.env.example

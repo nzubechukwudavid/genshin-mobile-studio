@@ -89,17 +89,17 @@ export const BgmManagerView: React.FC<BgmManagerViewProps> = ({
         ref={fileInputRef}
         onChange={handleAudioFilesSelected}
         multiple
-        accept="audio/*,.mp3,.flac,.wav,.ogg"
+        accept="audio/*,.mp3,.flac,.wav,.ogg,.m4a"
         className="hidden"
       />
 
-      {/* Hidden folder input for /sdcard/Music/** folder selection */}
+      {/* Hidden folder input for folder selection */}
       <input
         type="file"
         ref={folderInputRef}
         onChange={handleAudioFilesSelected}
         multiple
-        // @ts-expect-error webkitdirectory is standard for folder picking
+        // @ts-expect-error webkitdirectory is standard for desktop folder picking
         webkitdirectory="true"
         directory="true"
         className="hidden"

@@ -3,7 +3,8 @@ import { RawRecording, ClipSlot, EditingMode } from '../types';
 export const INITIAL_RECORDINGS: RawRecording[] = [];
 
 /**
- * Extracts metadata and real video snapshot thumbnail from a user-selected video file
+ * Extracts metadata and video snapshot thumbnail from a user-selected video file
+ * Protected with strict mobile timeouts so Android WebView never hangs on large files
  */
 export async function extractVideoMetadata(file: File): Promise<RawRecording> {
   const objectUrl = URL.createObjectURL(file);
@@ -14,15 +15,65 @@ export async function extractVideoMetadata(file: File): Promise<RawRecording> {
   video.playsInline = true;
 
   return new Promise((resolve) => {
+    let settled = false;
+    let seekTimer: any = null;
+
+    const finish = (recording: RawRecording) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(overallTimer);
+      if (seekTimer) clearTimeout(seekTimer);
+      video.onloadedmetadata = null;
+      video.onseeked = null;
+      video.onerror = null;
+      resolve(recording);
+    };
+
+    // Overall safety timeout (2.5 seconds max)
+    const overallTimer = setTimeout(() => {
+      finish({
+        id: `rec_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        filename: file.name,
+        path: `/sdcard/DCIM/ScreenRecorder/${file.name}`,
+        durationSec: 120,
+        timestamp: new Date(file.lastModified).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        isFailAttempt: false,
+        thumbnailUrl: '',
+        fileSizeMb: Math.round((file.size / (1024 * 1024)) * 10) / 10,
+        file,
+        objectUrl,
+        width: 1920,
+        height: 1080
+      });
+    }, 2500);
+
     video.onloadedmetadata = () => {
       const durationSec = Math.round(video.duration) || 60;
       const width = video.videoWidth || 1080;
       const height = video.videoHeight || 1920;
       const isFailAttempt = durationSec < 30; // Under 30s is classified as restart / fail take
+      const timestamp = new Date(file.lastModified).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-      // Seek to capture a real preview thumbnail frame
-      const seekTime = Math.min(durationSec * 0.25, 10);
-      video.currentTime = seekTime;
+      // Seek to capture a real preview thumbnail frame (keep within early seconds to avoid seek stall on Android)
+      const seekTime = Math.min(Math.max(0.5, durationSec * 0.1), 3);
+
+      seekTimer = setTimeout(() => {
+        // Seek timed out (common on mobile WebView with large files) -> fallback gracefully
+        finish({
+          id: `rec_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          filename: file.name,
+          path: `/sdcard/DCIM/ScreenRecorder/${file.name}`,
+          durationSec,
+          timestamp,
+          isFailAttempt,
+          thumbnailUrl: '',
+          fileSizeMb: Math.round((file.size / (1024 * 1024)) * 10) / 10,
+          file,
+          objectUrl,
+          width,
+          height
+        });
+      }, 1000);
 
       video.onseeked = () => {
         try {
@@ -32,11 +83,8 @@ export async function extractVideoMetadata(file: File): Promise<RawRecording> {
           const ctx = canvas.getContext('2d');
           if (ctx) {
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const thumbnailUrl = canvas.toDataURL('image/jpeg', 0.7);
-            
-            const timestamp = new Date(file.lastModified).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-            resolve({
+            const thumbnailUrl = canvas.toDataURL('image/jpeg', 0.65);
+            finish({
               id: `rec_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
               filename: file.name,
               path: `/sdcard/DCIM/ScreenRecorder/${file.name}`,
@@ -56,12 +104,12 @@ export async function extractVideoMetadata(file: File): Promise<RawRecording> {
           // Fallback if canvas capture encounters a security restriction
         }
 
-        resolve({
+        finish({
           id: `rec_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
           filename: file.name,
           path: `/sdcard/DCIM/ScreenRecorder/${file.name}`,
           durationSec,
-          timestamp: new Date(file.lastModified).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          timestamp,
           isFailAttempt,
           thumbnailUrl: '',
           fileSizeMb: Math.round((file.size / (1024 * 1024)) * 10) / 10,
@@ -71,10 +119,16 @@ export async function extractVideoMetadata(file: File): Promise<RawRecording> {
           height
         });
       };
+
+      try {
+        video.currentTime = seekTime;
+      } catch {
+        // Synchronous seek failure fallback
+      }
     };
 
     video.onerror = () => {
-      resolve({
+      finish({
         id: `rec_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         filename: file.name,
         path: `/sdcard/DCIM/ScreenRecorder/${file.name}`,

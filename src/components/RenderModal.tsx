@@ -72,7 +72,17 @@ export const RenderModal: React.FC<RenderModalProps> = ({
       }
     });
 
-    lines.push('echo "All chambers trimmed and mixed successfully in /sdcard/DCIM/GenshinAbyssStudio/"');
+    lines.push('');
+    lines.push('# Create concat list and assemble final unified video');
+    lines.push('cat << \'EOF\' > /sdcard/DCIM/GenshinAbyssStudio/concat.txt');
+    validSlots.forEach((_, idx) => {
+      lines.push(`file 'part_${idx + 1}.mp4'`);
+    });
+    lines.push('EOF');
+    lines.push(
+      'ffmpeg -y -f concat -safe 0 -i /sdcard/DCIM/GenshinAbyssStudio/concat.txt -c copy /sdcard/DCIM/GenshinAbyssStudio/Abyss_Floor12_36Star_Finished.mp4'
+    );
+    lines.push('echo "✅ Render complete! Output: /sdcard/DCIM/GenshinAbyssStudio/Abyss_Floor12_36Star_Finished.mp4"');
     return lines.join('\n');
   };
 

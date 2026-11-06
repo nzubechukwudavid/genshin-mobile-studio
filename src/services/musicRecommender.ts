@@ -12,6 +12,35 @@ export async function extractAudioMetadata(file: File): Promise<BgmTrack> {
   audio.src = audioUrl;
 
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (track: BgmTrack) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      audio.onloadedmetadata = null;
+      audio.onerror = null;
+      resolve(track);
+    };
+
+    const timer = setTimeout(() => {
+      const cleanTitle = file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ');
+      finish({
+        id: `bgm_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        title: cleanTitle,
+        artist: 'Local Music Track',
+        folder: 'Music',
+        durationSec: 120,
+        energyHint: 'general',
+        path: `/sdcard/Music/${file.name}`,
+        volumeGain: 0.0316,
+        fadeInSec: 0.2,
+        fadeOutSec: 1.5,
+        inPointSec: 0,
+        audioUrl,
+        file
+      });
+    }, 2000);
+
     audio.onloadedmetadata = () => {
       const durationSec = Math.round(audio.duration) || 120;
       // Clean up title: remove extension and replace underscores
@@ -32,7 +61,7 @@ export async function extractAudioMetadata(file: File): Promise<BgmTrack> {
         energyHint = 'chill';
       }
 
-      resolve({
+      finish({
         id: `bgm_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         title: cleanTitle,
         artist: 'Local Music Track',
@@ -50,7 +79,7 @@ export async function extractAudioMetadata(file: File): Promise<BgmTrack> {
     };
 
     audio.onerror = () => {
-      resolve({
+      finish({
         id: `bgm_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         title: file.name.replace(/\.[^/.]+$/, ''),
         artist: 'Local Music Track',

@@ -1,6 +1,6 @@
 {
   "appId": "com.genshin.abyssstudio",
-  "appName": "Android Auto-Editor",
+  "appName": "Genshin Mobile Studio",
   "webDir": "dist",
   "server": {
     "androidScheme": "https"
