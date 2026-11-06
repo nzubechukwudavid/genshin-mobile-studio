@@ -31,12 +31,13 @@ jobs:
       - name: Install Capacitor & Add Android Platform
         run: |
           npm install --legacy-peer-deps @capacitor/core @capacitor/cli @capacitor/android
-          npx cap init "Android Auto-Editor" "com.genshin.abyssstudio" --web-dir dist
+          rm -f capacitor.config.ts
           npx cap add android
           npx cap sync android
 
       - name: Build Debug APK with Gradle
         run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
