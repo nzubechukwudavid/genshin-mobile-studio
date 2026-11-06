@@ -25,12 +25,12 @@ jobs:
 
       - name: Install Dependencies & Build Web Assets
         run: |
-          npm ci || npm install
+          npm install --legacy-peer-deps
           npm run build
 
       - name: Install Capacitor & Add Android Platform
         run: |
-          npm install @capacitor/core @capacitor/cli @capacitor/android
+          npm install --legacy-peer-deps @capacitor/core @capacitor/cli @capacitor/android
           npx cap init "Android Auto-Editor" "com.genshin.abyssstudio" --web-dir dist
           npx cap add android
           npx cap sync android
