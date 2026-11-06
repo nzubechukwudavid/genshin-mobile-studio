@@ -28,44 +28,17 @@ jobs:
           npm install --legacy-peer-deps
           npm run build
 
-      - name: Install Capacitor & Add Android Platform
+      - name: Install Capacitor & Setup Android Platform
         run: |
           npm install --legacy-peer-deps @capacitor/core @capacitor/cli @capacitor/android
           rm -f capacitor.config.ts
           npx cap add android
           npx cap sync android
-          echo "configurations.all { exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk7'; exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk8' }" >> android/app/build.gradle
-          node -e '
-            const fs = require("fs");
-            const file = "android/app/src/main/AndroidManifest.xml";
-            if (fs.existsSync(file)) {
-              let content = fs.readFileSync(file, "utf8");
-              const perms = `
-    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
-    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
-    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
-`;
-              content = content.replace("<application", perms + "\n    <application android:requestLegacyExternalStorage=\"true\"");
-              fs.writeFileSync(file, content);
-            }
-          '
+          node scripts/configure-android.js
 
       - name: Build Debug APK with Gradle
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
-          mkdir -p ~/.gradle
-          cat << 'EOF' > ~/.gradle/init.gradle
-          allprojects {
-              configurations.all {
-                  exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk7'
-                  exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk8'
-              }
-          }
-          EOF
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
