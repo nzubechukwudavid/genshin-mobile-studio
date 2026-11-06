@@ -160,58 +160,93 @@ export const RenderModal: React.FC<RenderModalProps> = ({
 
         setCurrentStep(`Rendering Chamber ${i + 1}/${totalSegments}: ${slot.title}...`);
 
-        // Load video
+        // Load video safely with mobile timeout
         const video = document.createElement('video');
         video.src = clip.objectUrl || clip.path;
         video.crossOrigin = 'anonymous';
-        video.muted = false;
         video.playsInline = true;
+        video.muted = true; // Start muted to satisfy mobile autoplay policies
 
-        await new Promise((res) => {
-          video.onloadeddata = res;
-          video.onerror = res;
+        await new Promise<void>((res) => {
+          let done = false;
+          const finish = () => {
+            if (done) return;
+            done = true;
+            clearTimeout(loadTimeout);
+            res();
+          };
+          const loadTimeout = setTimeout(finish, 2500); // 2.5s max load wait
+          video.onloadeddata = finish;
+          video.oncanplay = finish;
+          video.onerror = finish;
         });
+
+        // Ensure audio context is resumed
+        if (audioCtx.state === 'suspended') {
+          await audioCtx.resume().catch(() => {});
+        }
 
         // Connect video audio to gain (0.10 = -20 dB)
         let videoSource: MediaElementAudioSourceNode | null = null;
-        const sfxGain = audioCtx.createGain();
-        sfxGain.gain.value = 0.10; // -20 dB for SFX
         try {
+          const sfxGain = audioCtx.createGain();
+          sfxGain.gain.value = 0.10; // -20 dB for SFX
           videoSource = audioCtx.createMediaElementSource(video);
           videoSource.connect(sfxGain);
           sfxGain.connect(dest);
+          video.muted = false; // Unmute if media element source is accepted
         } catch {
-          // In case of media element source restriction
+          video.muted = true; // Fallback to muted if mobile policy forbids source
         }
 
         // Setup BGM track (0.0316 = -30 dB)
         let bgmAudio: HTMLAudioElement | null = null;
         let bgmSource: MediaElementAudioSourceNode | null = null;
-        let bgmGain: GainNode | null = null;
 
         if (bgm && bgm.audioUrl) {
-          bgmAudio = new Audio(bgm.audioUrl);
-          bgmAudio.crossOrigin = 'anonymous';
-          bgmGain = audioCtx.createGain();
-          bgmGain.gain.setValueAtTime(0.0316, audioCtx.currentTime); // -30 dB BGM
           try {
+            bgmAudio = new Audio(bgm.audioUrl);
+            bgmAudio.crossOrigin = 'anonymous';
+            const bgmGain = audioCtx.createGain();
+            bgmGain.gain.setValueAtTime(0.0316, audioCtx.currentTime); // -30 dB BGM
             bgmSource = audioCtx.createMediaElementSource(bgmAudio);
             bgmSource.connect(bgmGain);
             bgmGain.connect(dest);
           } catch {}
         }
 
-        // Seek video to entry cut
-        video.currentTime = slot.entryCutSec;
-        await new Promise((res) => {
-          video.onseeked = res;
+        // Seek video to entry cut safely with timeout (prevents Android onseeked freeze)
+        try {
+          video.currentTime = slot.entryCutSec;
+        } catch {}
+
+        await new Promise<void>((res) => {
+          let done = false;
+          const finish = () => {
+            if (done) return;
+            done = true;
+            clearTimeout(seekTimeout);
+            res();
+          };
+          const seekTimeout = setTimeout(finish, 1000); // 1.0s max seek wait
+          video.onseeked = finish;
         });
 
         if (bgmAudio && bgm) {
-          bgmAudio.currentTime = bgm.inPointSec || 0;
+          try {
+            bgmAudio.currentTime = bgm.inPointSec || 0;
+          } catch {}
         }
 
-        await video.play().catch(() => {});
+        // Start playback with autoplay recovery
+        try {
+          await video.play();
+        } catch {
+          // If unmuted playback was blocked by browser policy, mute and play
+          video.muted = true;
+          await video.play().catch(() => {});
+        }
+
         if (bgmAudio) {
           await bgmAudio.play().catch(() => {});
         }
@@ -219,14 +254,30 @@ export const RenderModal: React.FC<RenderModalProps> = ({
         const segmentDuration = slot.effectiveCombatSec;
         const startTime = Date.now();
 
-        // Render frames for this slot
+        // Render frames for this slot with safety timeout and pump interval
         await new Promise<void>((resolveSegment) => {
+          let isSegmentDone = false;
+          let pumpInterval: any = null;
+
+          const finishSegment = () => {
+            if (isSegmentDone) return;
+            isSegmentDone = true;
+            if (pumpInterval) clearInterval(pumpInterval);
+            try { video.pause(); } catch {}
+            try { if (bgmAudio) bgmAudio.pause(); } catch {}
+            resolveSegment();
+          };
+
+          // Maximum safety timeout for this segment (+3s grace)
+          const maxSegmentTimeout = setTimeout(finishSegment, (segmentDuration + 3) * 1000);
+
           const drawFrame = () => {
+            if (isSegmentDone) return;
+
             const elapsed = (Date.now() - startTime) / 1000;
             if (elapsed >= segmentDuration || video.ended) {
-              video.pause();
-              if (bgmAudio) bgmAudio.pause();
-              resolveSegment();
+              clearTimeout(maxSegmentTimeout);
+              finishSegment();
               return;
             }
 
@@ -276,7 +327,17 @@ export const RenderModal: React.FC<RenderModalProps> = ({
             requestAnimationFrame(drawFrame);
           };
 
-          drawFrame();
+          // Safety pump in case requestAnimationFrame throttles in mobile WebView
+          pumpInterval = setInterval(() => {
+            if (isSegmentDone) return;
+            const elapsed = (Date.now() - startTime) / 1000;
+            if (elapsed >= segmentDuration) {
+              clearTimeout(maxSegmentTimeout);
+              finishSegment();
+            }
+          }, 500);
+
+          requestAnimationFrame(drawFrame);
         });
 
         // Cleanup nodes for this segment
