@@ -1,0 +1,8 @@
+{
+  "name": "Android Auto-Editor",
+  "description": "Mobile post-production suite for Genshin Spiral Abyss and Stygian Onslaught creators with automated trimming, smart BGM scoring, 1080p touch thumbnail studio, and YouTube chapters.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
