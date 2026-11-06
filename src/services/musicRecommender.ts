@@ -1,111 +1,73 @@
 import { BgmTrack } from '../types';
 
-export const DEFAULT_BGM_TRACKS: BgmTrack[] = [
-  {
-    id: 'track_rapid_wildfires',
-    title: 'Rapid as Wildfires (Liyue Battle Theme)',
-    artist: 'HOYO-MiX',
-    folder: 'Music/Combat/Liyue',
-    durationSec: 134, // 2:14
-    energyHint: 'high',
-    path: '/sdcard/Music/Combat/Rapid_as_Wildfires.mp3',
-    volumeGain: 0.0316, // -30.0 dB
-    fadeInSec: 0.1,
-    fadeOutSec: 1.5,
-    inPointSec: 0
-  },
-  {
-    id: 'track_duel_mist',
-    title: 'Duel in the Mist (Inazuma Battle Theme)',
-    artist: 'HOYO-MiX',
-    folder: 'Music/Combat/Inazuma',
-    durationSec: 112, // 1:52
-    energyHint: 'high',
-    path: '/sdcard/Music/Combat/Duel_in_the_Mist.mp3',
-    volumeGain: 0.0316,
-    fadeInSec: 0.1,
-    fadeOutSec: 1.5,
-    inPointSec: 0
-  },
-  {
-    id: 'track_boreal_wind',
-    title: 'Symphony of Boreal Wind (Andrius Climax)',
-    artist: 'HOYO-MiX',
-    folder: 'Music/Boss/Mondstadt',
-    durationSec: 185, // 3:05
-    energyHint: 'high',
-    path: '/sdcard/Music/Boss/Symphony_of_Boreal_Wind.mp3',
-    volumeGain: 0.0316,
-    fadeInSec: 0.1,
-    fadeOutSec: 1.5,
-    inPointSec: 16.0 // Virtual in-point skips choral buildup to land right on combat drop
-  },
-  {
-    id: 'track_rage_beneath',
-    title: 'Rage Beneath the Mountains (Azhdaha Phase 2)',
-    artist: 'HOYO-MiX',
-    folder: 'Music/Boss/Liyue',
-    durationSec: 238, // 3:58
-    energyHint: 'high',
-    path: '/sdcard/Music/Boss/Rage_Beneath_the_Mountains.mp3',
-    volumeGain: 0.0316,
-    fadeInSec: 0.1,
-    fadeOutSec: 1.5,
-    inPointSec: 20.0
-  },
-  {
-    id: 'track_natlan_warrior',
-    title: 'Anthem of the Blazing Path (Natlan Battle)',
-    artist: 'HOYO-MiX',
-    folder: 'Music/Combat/Natlan',
-    durationSec: 126, // 2:06
-    energyHint: 'high',
-    path: '/sdcard/Music/Combat/Anthem_of_Blazing_Path.mp3',
-    volumeGain: 0.0316,
-    fadeInSec: 0.1,
-    fadeOutSec: 1.5,
-    inPointSec: 0
-  },
-  {
-    id: 'track_whirl_of_leaves',
-    title: 'Whirl of Leaves and Petals (Sumeru Battle)',
-    artist: 'HOYO-MiX',
-    folder: 'Music/Combat/Sumeru',
-    durationSec: 108, // 1:48
-    energyHint: 'high',
-    path: '/sdcard/Music/Combat/Whirl_of_Leaves.mp3',
-    volumeGain: 0.0316,
-    fadeInSec: 0.1,
-    fadeOutSec: 1.5,
-    inPointSec: 0
-  },
-  {
-    id: 'track_mondstadt_day',
-    title: 'A Day in Mondstadt (Peaceful City Theme)',
-    artist: 'HOYO-MiX',
-    folder: 'Music/Chill/Towns',
-    durationSec: 92, // 1:32
-    energyHint: 'chill',
-    path: '/sdcard/Music/Chill/A_Day_in_Mondstadt.mp3',
-    volumeGain: 0.0316,
-    fadeInSec: 0.5,
-    fadeOutSec: 2.0,
-    inPointSec: 0
-  },
-  {
-    id: 'track_fontaine_harbor',
-    title: 'Lumiose City Promenade (Acoustic Strings)',
-    artist: 'HOYO-MiX',
-    folder: 'Music/Chill/Fontaine',
-    durationSec: 84, // 1:24
-    energyHint: 'chill',
-    path: '/sdcard/Music/Chill/Lumiose_Promenade.mp3',
-    volumeGain: 0.0316,
-    fadeInSec: 0.5,
-    fadeOutSec: 2.0,
-    inPointSec: 0
-  }
-];
+export const DEFAULT_BGM_TRACKS: BgmTrack[] = [];
+
+/**
+ * Extracts real duration and metadata from a user-imported audio file
+ */
+export async function extractAudioMetadata(file: File): Promise<BgmTrack> {
+  const audioUrl = URL.createObjectURL(file);
+  const audio = new Audio();
+  audio.preload = 'metadata';
+  audio.src = audioUrl;
+
+  return new Promise((resolve) => {
+    audio.onloadedmetadata = () => {
+      const durationSec = Math.round(audio.duration) || 120;
+      // Clean up title: remove extension and replace underscores
+      const cleanTitle = file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ');
+      
+      // Determine folder from webkitRelativePath if folder selection was used
+      const relativePath = (file as any).webkitRelativePath || '';
+      const folder = relativePath 
+        ? relativePath.substring(0, relativePath.lastIndexOf('/')) 
+        : 'Music/Imported';
+
+      // Guess energy from filename keywords if present
+      const lowerName = cleanTitle.toLowerCase();
+      let energyHint: 'high' | 'chill' | 'general' = 'general';
+      if (lowerName.includes('battle') || lowerName.includes('boss') || lowerName.includes('climax') || lowerName.includes('combat') || lowerName.includes('phase')) {
+        energyHint = 'high';
+      } else if (lowerName.includes('chill') || lowerName.includes('peace') || lowerName.includes('town') || lowerName.includes('night') || lowerName.includes('soft') || lowerName.includes('build')) {
+        energyHint = 'chill';
+      }
+
+      resolve({
+        id: `bgm_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        title: cleanTitle,
+        artist: 'Local Music Track',
+        folder,
+        durationSec,
+        energyHint,
+        path: `/sdcard/${folder}/${file.name}`,
+        volumeGain: 0.0316, // -30.0 dB default per specification
+        fadeInSec: 0.2,
+        fadeOutSec: 1.5,
+        inPointSec: 0,
+        audioUrl,
+        file
+      });
+    };
+
+    audio.onerror = () => {
+      resolve({
+        id: `bgm_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        title: file.name.replace(/\.[^/.]+$/, ''),
+        artist: 'Local Music Track',
+        folder: 'Music',
+        durationSec: 120,
+        energyHint: 'general',
+        path: `/sdcard/Music/${file.name}`,
+        volumeGain: 0.0316,
+        fadeInSec: 0.2,
+        fadeOutSec: 1.5,
+        inPointSec: 0,
+        audioUrl,
+        file
+      });
+    };
+  });
+}
 
 export function scoreTrackForDuration(
   track: BgmTrack,
@@ -130,7 +92,7 @@ export function scoreTrackForDuration(
       // Slightly longer; smooth 1.5s fade-out handles it cleanly
       durScore = 0.75 - delta / 40.0;
     } else {
-      // Long track: Use a virtual in-point (start at musical drop)
+      // Long track: Use a virtual in-point
       durScore = 0.45;
       const maxIn = Math.max(0, trackDur - targetSec);
       inPoint = Math.min(maxIn, 20.0, Math.max(0, delta / 3.0));
@@ -164,9 +126,16 @@ export function scoreTrackForDuration(
 
 export function recommendBgmSuite(
   slotDurations: { key: string; label: string; targetSec: number; preferEnergy: 'high' | 'chill' }[],
-  catalog: BgmTrack[] = DEFAULT_BGM_TRACKS
+  catalog: BgmTrack[] = []
 ): Record<string, { selected: BgmTrack | null; alternatives: BgmTrack[] }> {
   const result: Record<string, { selected: BgmTrack | null; alternatives: BgmTrack[] }> = {};
+  if (catalog.length === 0) {
+    for (const slot of slotDurations) {
+      result[slot.key] = { selected: null, alternatives: [] };
+    }
+    return result;
+  }
+
   const usedTrackIds = new Set<string>();
 
   for (const slot of slotDurations) {
@@ -190,7 +159,6 @@ export function recommendBgmSuite(
       });
     }
 
-    // Sort descending by score
     scoredCandidates.sort((a, b) => b.score - a.score);
 
     const winner = scoredCandidates[0]?.track || null;

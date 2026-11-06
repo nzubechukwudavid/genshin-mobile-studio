@@ -4,23 +4,22 @@ import {
   StygianTopology, 
   ClipSlot, 
   RawRecording, 
-  BgmTrack, 
-  ThumbnailStudioState 
+  BgmTrack 
 } from './types';
 import { INITIAL_RECORDINGS, createInitialSlots } from './services/trimmerEngine';
 import { DEFAULT_BGM_TRACKS, recommendBgmSuite } from './services/musicRecommender';
 import { TopHeader } from './components/TopHeader';
 import { BottomNavigation } from './components/BottomNavigation';
 import { ArrangerView } from './components/ArrangerView';
-import { ThumbnailStudioView } from './components/ThumbnailStudioView';
 import { BgmManagerView } from './components/BgmManagerView';
 import { RenderModal } from './components/RenderModal';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'arranger' | 'thumbnail' | 'bgm'>('arranger');
+  const [activeTab, setActiveTab] = useState<'arranger' | 'bgm'>('arranger');
   const [mode, setMode] = useState<EditingMode>('basic');
   const [stygianTopology, setStygianTopology] = useState<StygianTopology>('topology_2x2');
   
+  // Real user recordings and music tracks (empty by default)
   const [recordings, setRecordings] = useState<RawRecording[]>(INITIAL_RECORDINGS);
   const [slots, setSlots] = useState<ClipSlot[]>(() => createInitialSlots('basic'));
   const [bgmTracks, setBgmTracks] = useState<BgmTrack[]>(DEFAULT_BGM_TRACKS);
@@ -28,52 +27,6 @@ export default function App() {
   const [isScanning, setIsScanning] = useState(false);
   const [shizukuActive, setShizukuActive] = useState(true); // User confirmed Shizuku is enabled on their Xiaomi 13T Pro
   const [isRenderModalOpen, setIsRenderModalOpen] = useState(false);
-
-  // Thumbnail Studio State
-  const [thumbnailState, setThumbnailState] = useState<ThumbnailStudioState>({
-    layoutMode: 'dual',
-    side1: {
-      character: 'Mavuika',
-      element: 'Pyro',
-      constellation: 'C0',
-      archetype: 'OVERLOAD',
-      customName: '',
-      artUrl: 'https://act-webstatic.hoyoverse.com/event-static-hoyowiki-admin/2024/12/31/54d909eb97cf7095c9ee6e0ec2dca0ea_2299718428236109315.png',
-      scale: 1.05,
-      panX: -40,
-      panY: 0,
-      mirror: false,
-      teammates: ['Mavuika', 'Iansan', 'Chevreuse', 'Ororon']
-    },
-    side2: {
-      character: 'Chasca',
-      element: 'Anemo',
-      constellation: 'C0',
-      archetype: 'RAINBOW HYPER',
-      customName: '',
-      artUrl: 'https://act-webstatic.hoyoverse.com/event-static-hoyowiki-admin/2024/11/19/04d7c2f0f46f53e6b783ef8735dfdb96_7653634045524675549.png',
-      scale: 1.05,
-      panX: 40,
-      panY: 0,
-      mirror: true,
-      teammates: ['Chasca', 'Furina', 'Bennett', 'Ororon']
-    },
-    centerStyle: 'spire',
-    floor: '12',
-    hookText: 'NEW ENEMY !!',
-    showHook: true,
-    starBadge: {
-      enabled: true,
-      text: '36★ CLEAR'
-    },
-    watermark: {
-      enabled: false,
-      text: '@AbyssStudio'
-    },
-    overlays: [],
-    activeSlot: 1,
-    showEyeGuide: false
-  });
 
   // Re-initialize slots when mode changes
   const handleModeChange = (newMode: EditingMode) => {
@@ -83,6 +36,14 @@ export default function App() {
 
   // Re-calculate BGM assignments whenever slots or clips change
   const updateBgmAssignments = useCallback((currentSlots: ClipSlot[], catalog: BgmTrack[]) => {
+    if (catalog.length === 0) {
+      return currentSlots.map((s) => ({
+        ...s,
+        assignedBgm: null,
+        bgmAlternatives: []
+      }));
+    }
+
     const slotConfigs = currentSlots.map((s) => ({
       key: s.id,
       label: s.title,
@@ -110,23 +71,31 @@ export default function App() {
     setSlots(withBgm);
   };
 
-  // Initialize initial BGM assignments on mount
+  // Initialize BGM assignments on catalog changes
   useEffect(() => {
     setSlots((prev) => updateBgmAssignments(prev, bgmTracks));
   }, [updateBgmAssignments, bgmTracks]);
 
-  // Pull-to-refresh / scan screen recordings simulation
+  // Refresh trigger
   const handleRefreshRecordings = () => {
     setIsScanning(true);
     setTimeout(() => {
       setIsScanning(false);
-    }, 600);
+    }, 500);
   };
 
-  // Delete a failed attempt clip
+  // Add newly imported real video recordings
+  const handleAddRecordings = (newItems: RawRecording[]) => {
+    setRecordings((prev) => {
+      const existingIds = new Set(prev.map((r) => r.filename));
+      const filtered = newItems.filter((item) => !existingIds.has(item.filename));
+      return [...filtered, ...prev];
+    });
+  };
+
+  // Delete a recording
   const handleDeleteRecording = (id: string) => {
     setRecordings((prev) => prev.filter((r) => r.id !== id));
-    // Clear from slots if assigned
     setSlots((prev) =>
       prev.map((s) =>
         s.assignedClip?.id === id ? { ...s, assignedClip: null, effectiveCombatSec: 0 } : s
@@ -134,11 +103,24 @@ export default function App() {
     );
   };
 
-  // Add a custom music track
-  const handleAddTrack = (track: BgmTrack) => {
-    const newCatalog = [...bgmTracks, track];
-    setBgmTracks(newCatalog);
-    setSlots((prev) => updateBgmAssignments(prev, newCatalog));
+  // Add newly imported real BGM tracks
+  const handleAddTracks = (newItems: BgmTrack[]) => {
+    setBgmTracks((prev) => {
+      const existingTitles = new Set(prev.map((t) => t.title));
+      const filtered = newItems.filter((item) => !existingTitles.has(item.title));
+      const combined = [...prev, ...filtered];
+      setSlots((sPrev) => updateBgmAssignments(sPrev, combined));
+      return combined;
+    });
+  };
+
+  // Delete a BGM track
+  const handleDeleteTrack = (id: string) => {
+    setBgmTracks((prev) => {
+      const updated = prev.filter((t) => t.id !== id);
+      setSlots((sPrev) => updateBgmAssignments(sPrev, updated));
+      return updated;
+    });
   };
 
   const filledCount = slots.filter((s) => s.assignedClip).length;
@@ -165,24 +147,18 @@ export default function App() {
             onSlotsChange={handleSlotsChange}
             recordings={recordings}
             onDeleteRecording={handleDeleteRecording}
-            onAddRecording={(r) => setRecordings((prev) => [r, ...prev])}
+            onAddRecordings={handleAddRecordings}
             onRefreshRecordings={handleRefreshRecordings}
             isScanning={isScanning}
             shizukuActive={shizukuActive}
           />
         )}
 
-        {activeTab === 'thumbnail' && (
-          <ThumbnailStudioView
-            state={thumbnailState}
-            onChange={setThumbnailState}
-          />
-        )}
-
         {activeTab === 'bgm' && (
           <BgmManagerView
             tracks={bgmTracks}
-            onAddTrack={handleAddTrack}
+            onAddTracks={handleAddTracks}
+            onDeleteTrack={handleDeleteTrack}
           />
         )}
       </main>
@@ -196,11 +172,10 @@ export default function App() {
         totalSlotsCount={slots.length}
       />
 
-      {/* Hardware Media3 Render & Assembly Modal */}
+      {/* 1080p 60fps Video Assembly Modal */}
       {isRenderModalOpen && (
         <RenderModal
           slots={slots}
-          thumbnailState={thumbnailState}
           onClose={() => setIsRenderModalOpen(false)}
           shizukuActive={shizukuActive}
         />

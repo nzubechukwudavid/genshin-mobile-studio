@@ -1,66 +1,80 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { BgmTrack } from '../types';
 import { formatTimeMMSS } from '../services/trimmerEngine';
-import { Music, Play, Pause, Folder, Sparkles, Plus, Volume2 } from 'lucide-react';
+import { extractAudioMetadata } from '../services/musicRecommender';
+import { Music, Play, Pause, Folder, Plus, Volume2, Upload, Trash2, FolderOpen } from 'lucide-react';
 
 interface BgmManagerViewProps {
   tracks: BgmTrack[];
-  onAddTrack: (track: BgmTrack) => void;
+  onAddTracks: (tracks: BgmTrack[]) => void;
+  onDeleteTrack: (id: string) => void;
 }
 
-export const BgmManagerView: React.FC<BgmManagerViewProps> = ({ tracks, onAddTrack }) => {
+export const BgmManagerView: React.FC<BgmManagerViewProps> = ({
+  tracks,
+  onAddTracks,
+  onDeleteTrack
+}) => {
   const [playingTrackId, setPlayingTrackId] = useState<string | null>(null);
   const [selectedFolder, setSelectedFolder] = useState<string>('all');
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [newTrackTitle, setNewTrackTitle] = useState('');
-  const [newTrackFolder, setNewTrackFolder] = useState('Music/Combat');
-  const [newTrackDuration, setNewTrackDuration] = useState(120);
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Extract unique subfolders
   const folders = ['all', ...Array.from(new Set(tracks.map((t) => t.folder)))];
 
-  const handlePlayToggle = (track: BgmTrack) => {
-    if (playingTrackId === track.id) {
-      setPlayingTrackId(null);
-    } else {
-      setPlayingTrackId(track.id);
-      // Play brief simulated sound beep or preview
-      try {
-        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
-        osc.frequency.value = track.energyHint === 'chill' ? 330 : 520;
-        gain.gain.value = 0.05;
-        osc.connect(gain);
-        gain.connect(audioCtx.destination);
-        osc.start();
-        setTimeout(() => {
-          osc.stop();
-          audioCtx.close();
-        }, 800);
-      } catch {}
+  // Process user selected audio files
+  const handleAudioFilesSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setIsProcessing(true);
+    const newTracks: BgmTrack[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (file.type.startsWith('audio/') || file.name.endsWith('.mp3') || file.name.endsWith('.flac') || file.name.endsWith('.wav') || file.name.endsWith('.ogg')) {
+        const track = await extractAudioMetadata(file);
+        newTracks.push(track);
+      }
     }
+
+    if (newTracks.length > 0) {
+      onAddTracks(newTracks);
+    }
+    setIsProcessing(false);
+    e.target.value = '';
   };
 
-  const handleCreateCustomTrack = () => {
-    if (!newTrackTitle) return;
-    const isChill = newTrackFolder.toLowerCase().includes('chill');
-    const custom: BgmTrack = {
-      id: `custom_${Date.now()}`,
-      title: newTrackTitle,
-      artist: 'Custom User Track',
-      folder: newTrackFolder,
-      durationSec: newTrackDuration,
-      energyHint: isChill ? 'chill' : 'high',
-      path: `/sdcard/${newTrackFolder}/${newTrackTitle.replace(/\s+/g, '_')}.mp3`,
-      volumeGain: 0.0316,
-      fadeInSec: 0.1,
-      fadeOutSec: 1.5,
-      inPointSec: 0
-    };
-    onAddTrack(custom);
-    setNewTrackTitle('');
-    setIsAddModalOpen(false);
+  // Play / Pause real audio track with volume normalization
+  const handlePlayToggle = (track: BgmTrack) => {
+    if (playingTrackId === track.id) {
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current = null;
+      }
+      setPlayingTrackId(null);
+    } else {
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+      }
+
+      if (track.audioUrl) {
+        const audio = new Audio(track.audioUrl);
+        audio.volume = 0.35; // Normalized audition volume
+        audio.play().catch(() => {});
+        audio.onended = () => setPlayingTrackId(null);
+        currentAudioRef.current = audio;
+        setPlayingTrackId(track.id);
+      } else {
+        // Fallback test sound if raw audio URL not cached
+        setPlayingTrackId(track.id);
+        setTimeout(() => setPlayingTrackId(null), 1500);
+      }
+    }
   };
 
   const filteredTracks = tracks.filter((t) => {
@@ -69,161 +83,158 @@ export const BgmManagerView: React.FC<BgmManagerViewProps> = ({ tracks, onAddTra
 
   return (
     <div className="flex flex-col gap-4 pb-24">
+      {/* Hidden file input for music files */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleAudioFilesSelected}
+        multiple
+        accept="audio/*,.mp3,.flac,.wav,.ogg"
+        className="hidden"
+      />
+
+      {/* Hidden folder input for /sdcard/Music/** folder selection */}
+      <input
+        type="file"
+        ref={folderInputRef}
+        onChange={handleAudioFilesSelected}
+        multiple
+        // @ts-expect-error webkitdirectory is standard for folder picking
+        webkitdirectory="true"
+        directory="true"
+        className="hidden"
+      />
+
       {/* Directory Status Header */}
       <div className="bg-[#151A23] rounded-2xl p-4 border border-[#232B38] flex flex-col gap-3">
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
               <Folder className="w-4 h-4 text-[#FED662]" />
-              <span>LOCAL MUSIC LIBRARY</span>
+              <span>BGM LIBRARY</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded bg-[#232B38] text-slate-300 font-mono">
+                {tracks.length} Tracks
+              </span>
             </h3>
             <p className="text-[11px] text-slate-400 mt-0.5">
-              Recursive scan of <code className="text-[#00E5FF]">/sdcard/Music/**</code>
+              Import from <code className="text-[#00E5FF]">/sdcard/Music/**</code>
             </p>
           </div>
 
-          <button
-            onClick={() => setIsAddModalOpen(true)}
-            className="px-3 py-1.5 rounded-xl bg-[#232B38] text-white text-xs font-semibold hover:bg-[#2C3646] flex items-center gap-1.5"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            Add Track
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isProcessing}
+              className="px-3 py-1.5 rounded-xl bg-[#232B38] text-white text-xs font-bold hover:bg-[#2C3646] flex items-center gap-1.5"
+            >
+              <Upload className="w-3.5 h-3.5 text-[#FED662]" />
+              <span>Select Files</span>
+            </button>
+            <button
+              onClick={() => folderInputRef.current?.click()}
+              disabled={isProcessing}
+              className="px-3 py-1.5 rounded-xl bg-[#FED662] text-[#0B0E14] text-xs font-black hover:brightness-110 flex items-center gap-1.5"
+            >
+              <FolderOpen className="w-3.5 h-3.5" />
+              <span>Import Folder</span>
+            </button>
+          </div>
         </div>
 
         {/* Folder Filter Chips */}
-        <div className="flex gap-1.5 overflow-x-auto pt-1">
-          {folders.map((f) => (
-            <button
-              key={f}
-              onClick={() => setSelectedFolder(f)}
-              className={`px-3 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-                selectedFolder === f
-                  ? 'bg-[#FED662] text-[#0B0E14] font-bold'
-                  : 'bg-[#0B0E14] text-slate-400 hover:text-white'
-              }`}
-            >
-              {f === 'all' ? 'ALL SUBFOLDERS' : f.replace('Music/', '')}
-            </button>
-          ))}
-        </div>
+        {folders.length > 1 && (
+          <div className="flex gap-1.5 overflow-x-auto pt-1">
+            {folders.map((f) => (
+              <button
+                key={f}
+                onClick={() => setSelectedFolder(f)}
+                className={`px-3 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
+                  selectedFolder === f
+                    ? 'bg-[#FED662] text-[#0B0E14] font-bold'
+                    : 'bg-[#0B0E14] text-slate-400 hover:text-white'
+                }`}
+              >
+                {f === 'all' ? 'ALL SUBFOLDERS' : f.replace('Music/', '')}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Tracks List */}
       <div className="flex flex-col gap-2.5">
         <div className="text-xs font-bold text-slate-400 px-1">
-          INDEXED TRACKS ({filteredTracks.length}) · BROADCAST NORMALIZED (-30 dB)
+          INDEXED BGM TRACKS ({filteredTracks.length}) · NORMALIZED (-30.0 dB)
         </div>
 
-        {filteredTracks.map((track) => {
-          const isPlaying = playingTrackId === track.id;
-          return (
-            <div
-              key={track.id}
-              className="bg-[#12161E] rounded-xl p-3 border border-[#232B38] flex items-center justify-between gap-3 hover:border-slate-700 transition-colors"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <button
-                  onClick={() => handlePlayToggle(track)}
-                  className={`w-9 h-9 rounded-xl flex items-center justify-center transition-colors ${
-                    isPlaying
-                      ? 'bg-[#FED662] text-[#0B0E14]'
-                      : 'bg-[#232B38] text-slate-300 hover:text-white'
-                  }`}
-                >
-                  {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
-                </button>
-
-                <div className="min-w-0">
-                  <div className="text-xs font-bold text-white truncate">{track.title}</div>
-                  <div className="text-[11px] text-slate-400 flex items-center gap-2 mt-0.5">
-                    <span>{track.artist}</span>
-                    <span>·</span>
-                    <span className="text-[#FED662]">{track.folder.replace('Music/', '')}</span>
-                    <span>·</span>
-                    <span
-                      className={`px-1.5 py-0.2 rounded text-[9px] font-bold uppercase ${
-                        track.energyHint === 'high'
-                          ? 'bg-orange-500/10 text-orange-400'
-                          : 'bg-emerald-500/10 text-emerald-400'
-                      }`}
-                    >
-                      {track.energyHint} energy
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                <span className="font-mono text-xs text-slate-300">
-                  {formatTimeMMSS(track.durationSec)}
-                </span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Add Custom Track Modal */}
-      {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#151A23] w-full max-w-sm rounded-2xl border border-[#232B38] p-4 flex flex-col gap-3">
-            <h4 className="text-sm font-bold text-white">Add Music Track</h4>
-
-            <div>
-              <label className="text-xs text-slate-400">Song Title</label>
-              <input
-                type="text"
-                placeholder="e.g. Die Mittsommernacht-Fantasie"
-                value={newTrackTitle}
-                onChange={(e) => setNewTrackTitle(e.target.value)}
-                className="w-full bg-[#0B0E14] border border-[#232B38] rounded-xl px-3 py-2 text-xs text-white mt-1 focus:outline-none focus:border-[#FED662]"
-              />
-            </div>
-
-            <div>
-              <label className="text-xs text-slate-400">Subfolder</label>
-              <select
-                value={newTrackFolder}
-                onChange={(e) => setNewTrackFolder(e.target.value)}
-                className="w-full bg-[#0B0E14] border border-[#232B38] rounded-xl px-3 py-2 text-xs text-white mt-1 focus:outline-none focus:border-[#FED662]"
-              >
-                <option value="Music/Combat/Liyue">Music/Combat/Liyue (High Energy)</option>
-                <option value="Music/Combat/Inazuma">Music/Combat/Inazuma (High Energy)</option>
-                <option value="Music/Boss/Natlan">Music/Boss/Natlan (Climax)</option>
-                <option value="Music/Chill/Towns">Music/Chill/Towns (Builds Outro)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="text-xs text-slate-400">Duration (Seconds)</label>
-              <input
-                type="number"
-                min="30"
-                max="600"
-                value={newTrackDuration}
-                onChange={(e) => setNewTrackDuration(parseInt(e.target.value) || 120)}
-                className="w-full bg-[#0B0E14] border border-[#232B38] rounded-xl px-3 py-2 text-xs text-white mt-1 font-mono focus:outline-none focus:border-[#FED662]"
-              />
-            </div>
-
-            <div className="flex gap-2 pt-2">
-              <button
-                onClick={() => setIsAddModalOpen(false)}
-                className="flex-1 py-2 rounded-xl bg-[#232B38] text-xs font-semibold text-slate-300"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCreateCustomTrack}
-                className="flex-1 py-2 rounded-xl bg-[#FED662] text-xs font-bold text-[#0B0E14]"
-              >
-                Save Track
-              </button>
+        {filteredTracks.length === 0 ? (
+          <div 
+            onClick={() => fileInputRef.current?.click()}
+            className="border-2 border-dashed border-[#232B38] hover:border-[#FED662]/60 rounded-2xl p-8 flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors bg-[#0B0E14]/50"
+          >
+            <Music className="w-8 h-8 text-slate-500" />
+            <div className="text-xs font-bold text-slate-200">No BGM tracks imported yet</div>
+            <div className="text-[11px] text-slate-400 text-center max-w-xs">
+              Tap here to select tracks from your phone's Music folder. The auto-arranger matches each track to chamber duration with zero duplicates.
             </div>
           </div>
-        </div>
-      )}
+        ) : (
+          filteredTracks.map((track) => {
+            const isPlaying = playingTrackId === track.id;
+            return (
+              <div
+                key={track.id}
+                className="bg-[#12161E] rounded-xl p-3 border border-[#232B38] flex items-center justify-between gap-3 hover:border-slate-700 transition-colors"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <button
+                    onClick={() => handlePlayToggle(track)}
+                    className={`w-9 h-9 rounded-xl flex items-center justify-center transition-colors shrink-0 ${
+                      isPlaying
+                        ? 'bg-[#FED662] text-[#0B0E14]'
+                        : 'bg-[#232B38] text-slate-300 hover:text-white'
+                    }`}
+                  >
+                    {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
+                  </button>
+
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-white truncate">{track.title}</div>
+                    <div className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5">
+                      <span className="text-[#FED662] truncate max-w-[120px]">{track.folder.replace('Music/', '')}</span>
+                      <span>·</span>
+                      <span
+                        className={`px-1.5 py-0.2 rounded text-[9px] font-bold uppercase ${
+                          track.energyHint === 'high'
+                            ? 'bg-orange-500/10 text-orange-400'
+                            : 'bg-emerald-500/10 text-emerald-400'
+                        }`}
+                      >
+                        {track.energyHint} energy
+                      </span>
+                      <span>·</span>
+                      <span>Vol: -30 dB</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="font-mono text-xs text-slate-300">
+                    {formatTimeMMSS(track.durationSec)}
+                  </span>
+                  <button
+                    onClick={() => onDeleteTrack(track.id)}
+                    className="p-1.5 rounded-lg bg-[#232B38] text-slate-400 hover:text-red-400"
+                    title="Remove Track"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
     </div>
   );
 };

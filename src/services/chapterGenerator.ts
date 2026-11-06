@@ -1,9 +1,8 @@
-import { ClipSlot, YouTubeChapter, ThumbnailStudioState } from '../types';
+import { ClipSlot, YouTubeChapter } from '../types';
 import { formatTimeMMSS } from './trimmerEngine';
 
 export function calculateChapters(
-  slots: ClipSlot[],
-  thumbnailState: ThumbnailStudioState
+  slots: ClipSlot[]
 ): { chapters: YouTubeChapter[]; totalDurationSec: number } {
   const chapters: YouTubeChapter[] = [];
   let currentTime = 0;
@@ -11,21 +10,10 @@ export function calculateChapters(
   for (const slot of slots) {
     if (!slot.assignedClip) continue;
 
-    let title = slot.title;
-    if (slot.chamberKey === 'chamber_1') {
-      title = `Chamber 12-1 (${thumbnailState.side1.character} ${thumbnailState.side1.archetype})`;
-    } else if (slot.chamberKey === 'chamber_2') {
-      title = `Chamber 12-2 (${thumbnailState.side2.character} ${thumbnailState.side2.archetype})`;
-    } else if (slot.chamberKey === 'chamber_3') {
-      title = `Chamber 12-3 (36★ Clear)`;
-    } else if (slot.chamberKey === 'builds') {
-      title = `Character Builds, Weapons & Artifacts`;
-    }
-
     chapters.push({
       timestamp: formatTimeMMSS(currentTime),
       seconds: currentTime,
-      title
+      title: slot.title
     });
 
     currentTime += slot.effectiveCombatSec;
@@ -36,38 +24,35 @@ export function calculateChapters(
 
 export function generateYouTubeDescription(
   slots: ClipSlot[],
-  thumbnailState: ThumbnailStudioState,
-  patchVersion: string = '7.1'
+  patchVersion: string = '5.x'
 ): string {
-  const { chapters } = calculateChapters(slots, thumbnailState);
+  const { chapters } = calculateChapters(slots);
 
   const timestampLines = chapters.map((c) => `${c.timestamp} - ${c.title}`).join('\n');
 
-  // Music credits
+  // Music credits from assigned BGMs
   const musicLines = slots
     .filter((s) => s.assignedBgm && s.assignedClip)
     .map((s) => {
-      const ch = chapters.find((c) => c.title.includes(s.title) || s.title.includes(c.title));
+      const ch = chapters.find((c) => c.title === s.title);
       const ts = ch ? ch.timestamp : '00:00';
       return `${ts} - ${s.assignedBgm?.title} (${s.assignedBgm?.artist})`;
     })
     .join('\n');
 
-  return `Genshin Impact Spiral Abyss Version ${patchVersion} Floor 12 Showcase!
-Featuring ${thumbnailState.side1.constellation} ${thumbnailState.side1.character} (${thumbnailState.side1.archetype}) & ${thumbnailState.side2.constellation} ${thumbnailState.side2.character} (${thumbnailState.side2.archetype}).
+  return `Genshin Impact Spiral Abyss Floor 12 36★ Clear!
 
 ⏱️ TIMESTAMPS:
 ${timestampLines || '00:00 - Full Run'}
 
-🎵 BACKGROUND MUSIC:
-${musicLines || 'HOYO-MiX Official Battle Tracks'}
+🎵 SOUNDTRACK & BGM:
+${musicLines || 'Dynamic In-Game SFX (-20 dB) + Custom BGM (-30 dB)'}
 
-Team Lineup:
-• Side 1: ${thumbnailState.side1.teammates.join(' · ')}
-• Side 2: ${thumbnailState.side2.teammates.join(' · ')}
+Settings:
+• Audio Ducking: Disabled (Native SFX -20 dB, BGM -30 dB)
+• In-Chamber Fade: 0.5s Black Fade
+• Recorded on Xiaomi 13T Pro (1080p 60fps)
+• Auto-Assembled via Android Auto-Editor
 
-Recorded directly on Xiaomi 13T Pro (1080p 60fps).
-Edited & Assembled with Android Auto-Editor (Genshin Abyss Studio Mobile).
-
-#GenshinImpact #SpiralAbyss #Floor12 #Mavuika #Chasca #GenshinShowcase`;
+#GenshinImpact #SpiralAbyss #Floor12 #GenshinShowcase`;
 }

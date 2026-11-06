@@ -1,104 +1,134 @@
 import { RawRecording, ClipSlot, EditingMode } from '../types';
 
-export const INITIAL_RECORDINGS: RawRecording[] = [
-  {
-    id: 'rec_01_c12_1',
-    filename: 'Screenrecorder-2026-11-06-14-22-10-128.mp4',
-    path: '/sdcard/DCIM/ScreenRecorder/Screenrecorder-2026-11-06-14-22-10-128.mp4',
-    durationSec: 134, // 2:14
-    timestamp: '14:22',
-    isFailAttempt: false,
-    thumbnailUrl: 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=320&auto=format&fit=crop&q=80',
-    fileSizeMb: 428
-  },
-  {
-    id: 'rec_fail_01',
-    filename: 'Screenrecorder-2026-11-06-14-25-02-094.mp4',
-    path: '/sdcard/DCIM/ScreenRecorder/Screenrecorder-2026-11-06-14-25-02-094.mp4',
-    durationSec: 28, // 0:28 - Failed take (Bennett died)
-    timestamp: '14:25',
-    isFailAttempt: true,
-    thumbnailUrl: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=320&auto=format&fit=crop&q=80',
-    fileSizeMb: 88
-  },
-  {
-    id: 'rec_02_c12_2',
-    filename: 'Screenrecorder-2026-11-06-14-27-44-512.mp4',
-    path: '/sdcard/DCIM/ScreenRecorder/Screenrecorder-2026-11-06-14-27-44-512.mp4',
-    durationSec: 112, // 1:52
-    timestamp: '14:27',
-    isFailAttempt: false,
-    thumbnailUrl: 'https://images.unsplash.com/photo-1511512578047-dfb367046420?w=320&auto=format&fit=crop&q=80',
-    fileSizeMb: 356
-  },
-  {
-    id: 'rec_fail_02',
-    filename: 'Screenrecorder-2026-11-06-14-31-15-778.mp4',
-    path: '/sdcard/DCIM/ScreenRecorder/Screenrecorder-2026-11-06-14-31-15-778.mp4',
-    durationSec: 19, // 0:19 - Misclicked rotation
-    timestamp: '14:31',
-    isFailAttempt: true,
-    thumbnailUrl: 'https://images.unsplash.com/photo-1579373903781-fd5c0c30c4cd?w=320&auto=format&fit=crop&q=80',
-    fileSizeMb: 60
-  },
-  {
-    id: 'rec_03_c12_3',
-    filename: 'Screenrecorder-2026-11-06-14-33-58-204.mp4',
-    path: '/sdcard/DCIM/ScreenRecorder/Screenrecorder-2026-11-06-14-33-58-204.mp4',
-    durationSec: 148, // 2:28
-    timestamp: '14:33',
-    isFailAttempt: false,
-    thumbnailUrl: 'https://images.unsplash.com/photo-1538481199705-c710c4e965fc?w=320&auto=format&fit=crop&q=80',
-    fileSizeMb: 472
-  },
-  {
-    id: 'rec_04_builds',
-    filename: 'Screenrecorder-2026-11-06-14-38-40-662.mp4',
-    path: '/sdcard/DCIM/ScreenRecorder/Screenrecorder-2026-11-06-14-38-40-662.mp4',
-    durationSec: 90, // 1:30 - Character builds showcase
-    timestamp: '14:38',
-    isFailAttempt: false,
-    thumbnailUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=320&auto=format&fit=crop&q=80',
-    fileSizeMb: 288
-  }
-];
+export const INITIAL_RECORDINGS: RawRecording[] = [];
 
+/**
+ * Extracts metadata and real video snapshot thumbnail from a user-selected video file
+ */
+export async function extractVideoMetadata(file: File): Promise<RawRecording> {
+  const objectUrl = URL.createObjectURL(file);
+  const video = document.createElement('video');
+  video.preload = 'metadata';
+  video.src = objectUrl;
+  video.muted = true;
+  video.playsInline = true;
+
+  return new Promise((resolve) => {
+    video.onloadedmetadata = () => {
+      const durationSec = Math.round(video.duration) || 60;
+      const width = video.videoWidth || 1080;
+      const height = video.videoHeight || 1920;
+      const isFailAttempt = durationSec < 30; // Under 30s is classified as restart / fail take
+
+      // Seek to capture a real preview thumbnail frame
+      const seekTime = Math.min(durationSec * 0.25, 10);
+      video.currentTime = seekTime;
+
+      video.onseeked = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = 320;
+          canvas.height = 180;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const thumbnailUrl = canvas.toDataURL('image/jpeg', 0.7);
+            
+            const timestamp = new Date(file.lastModified).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+            resolve({
+              id: `rec_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+              filename: file.name,
+              path: `/sdcard/DCIM/ScreenRecorder/${file.name}`,
+              durationSec,
+              timestamp,
+              isFailAttempt,
+              thumbnailUrl,
+              fileSizeMb: Math.round((file.size / (1024 * 1024)) * 10) / 10,
+              file,
+              objectUrl,
+              width,
+              height
+            });
+            return;
+          }
+        } catch {
+          // Fallback if canvas capture encounters a security restriction
+        }
+
+        resolve({
+          id: `rec_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          filename: file.name,
+          path: `/sdcard/DCIM/ScreenRecorder/${file.name}`,
+          durationSec,
+          timestamp: new Date(file.lastModified).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          isFailAttempt,
+          thumbnailUrl: '',
+          fileSizeMb: Math.round((file.size / (1024 * 1024)) * 10) / 10,
+          file,
+          objectUrl,
+          width,
+          height
+        });
+      };
+    };
+
+    video.onerror = () => {
+      resolve({
+        id: `rec_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        filename: file.name,
+        path: `/sdcard/DCIM/ScreenRecorder/${file.name}`,
+        durationSec: 120,
+        timestamp: 'Now',
+        isFailAttempt: false,
+        thumbnailUrl: '',
+        fileSizeMb: Math.round((file.size / (1024 * 1024)) * 10) / 10,
+        file,
+        objectUrl
+      });
+    };
+  });
+}
+
+/**
+ * Creates empty timeline slots for the chosen mode
+ */
 export function createInitialSlots(mode: EditingMode): ClipSlot[] {
   if (mode === 'stygian') {
     return [
       {
         id: 'slot_boss_1',
         chamberKey: 'boss_1',
-        title: 'Battlefield 1: Domovoy Sculptor',
+        title: 'Battlefield 1: Boss Take',
         subtitle: 'Entry countdown -> Victory screen (+2.0s hold)',
         assignedClip: null,
         entryCutSec: 3.0,
-        tailCutSec: 130.0,
-        effectiveCombatSec: 127.0,
+        tailCutSec: 120.0,
+        effectiveCombatSec: 117.0,
         assignedBgm: null,
         bgmAlternatives: []
       },
       {
         id: 'slot_boss_2',
         chamberKey: 'boss_2',
-        title: 'Battlefield 2: Overseer Device',
+        title: 'Battlefield 2: Boss Take',
         subtitle: 'Entry countdown -> Victory screen (+2.0s hold)',
         assignedClip: null,
-        entryCutSec: 2.8,
-        tailCutSec: 110.0,
-        effectiveCombatSec: 107.2,
+        entryCutSec: 3.0,
+        tailCutSec: 120.0,
+        effectiveCombatSec: 117.0,
         assignedBgm: null,
         bgmAlternatives: []
       },
       {
         id: 'slot_boss_3',
         chamberKey: 'boss_3',
-        title: 'Battlefield 3: Guardian Blade',
+        title: 'Battlefield 3: Boss Take',
         subtitle: 'Entry countdown -> Victory screen (+2.0s hold)',
         assignedClip: null,
-        entryCutSec: 3.2,
-        tailCutSec: 144.0,
-        effectiveCombatSec: 140.8,
+        entryCutSec: 3.0,
+        tailCutSec: 120.0,
+        effectiveCombatSec: 117.0,
         assignedBgm: null,
         bgmAlternatives: []
       },
@@ -117,7 +147,7 @@ export function createInitialSlots(mode: EditingMode): ClipSlot[] {
     ];
   }
 
-  // Standard Basic F12 & Showcase
+  // Standard Basic F12 (12-1, 12-2, 12-3, Builds)
   return [
     {
       id: 'slot_c12_1',
@@ -126,10 +156,10 @@ export function createInitialSlots(mode: EditingMode): ClipSlot[] {
       subtitle: 'Side 1 -> Intermission -> Side 2 (3-Star Victory Freeze)',
       assignedClip: null,
       entryCutSec: 3.2,
-      tailCutSec: 131.0,
-      intermissionStartSec: 64.0,
-      intermissionEndSec: 67.5,
-      effectiveCombatSec: 124.3,
+      tailCutSec: 120.0,
+      intermissionStartSec: 60.0,
+      intermissionEndSec: 63.5,
+      effectiveCombatSec: 113.3,
       assignedBgm: null,
       bgmAlternatives: []
     },
@@ -139,11 +169,11 @@ export function createInitialSlots(mode: EditingMode): ClipSlot[] {
       title: 'Chamber 12-2 (Side 1 & 2)',
       subtitle: 'Side 1 -> Intermission -> Side 2 (3-Star Victory Freeze)',
       assignedClip: null,
-      entryCutSec: 2.9,
-      tailCutSec: 109.5,
-      intermissionStartSec: 52.0,
-      intermissionEndSec: 55.2,
-      effectiveCombatSec: 103.4,
+      entryCutSec: 3.0,
+      tailCutSec: 120.0,
+      intermissionStartSec: 60.0,
+      intermissionEndSec: 63.5,
+      effectiveCombatSec: 113.5,
       assignedBgm: null,
       bgmAlternatives: []
     },
@@ -153,11 +183,11 @@ export function createInitialSlots(mode: EditingMode): ClipSlot[] {
       title: 'Chamber 12-3 (Side 1 & 2)',
       subtitle: 'Side 1 -> Intermission -> Side 2 (Floor 12 36★ Complete)',
       assignedClip: null,
-      entryCutSec: 3.4,
-      tailCutSec: 144.0,
-      intermissionStartSec: 71.0,
-      intermissionEndSec: 74.5,
-      effectiveCombatSec: 137.1,
+      entryCutSec: 3.2,
+      tailCutSec: 120.0,
+      intermissionStartSec: 60.0,
+      intermissionEndSec: 63.5,
+      effectiveCombatSec: 113.3,
       assignedBgm: null,
       bgmAlternatives: []
     },

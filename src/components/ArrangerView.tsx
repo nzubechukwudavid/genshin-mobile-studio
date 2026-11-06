@@ -1,20 +1,22 @@
-import React, { useState } from 'react';
-import { ClipSlot, RawRecording, EditingMode, StygianTopology, BgmTrack } from '../types';
-import { formatTimeMMSS } from '../services/trimmerEngine';
+import React, { useState, useRef } from 'react';
+import { ClipSlot, RawRecording, EditingMode, StygianTopology } from '../types';
+import { formatTimeMMSS, extractVideoMetadata } from '../services/trimmerEngine';
 import { 
   Play, 
   Trash2, 
   RefreshCw, 
   Scissors, 
   Music, 
-  Clock, 
   Sparkles, 
-  Plus, 
   CheckCircle2, 
   AlertTriangle,
   ArrowRightLeft,
-  ChevronDown,
-  Volume2
+  Volume2,
+  FolderOpen,
+  Film,
+  Upload,
+  AlertCircle,
+  Plus
 } from 'lucide-react';
 
 interface ArrangerViewProps {
@@ -26,7 +28,7 @@ interface ArrangerViewProps {
   onSlotsChange: (slots: ClipSlot[]) => void;
   recordings: RawRecording[];
   onDeleteRecording: (id: string) => void;
-  onAddRecording: (recording: RawRecording) => void;
+  onAddRecordings: (newRecordings: RawRecording[]) => void;
   onRefreshRecordings: () => void;
   isScanning: boolean;
   shizukuActive: boolean;
@@ -41,7 +43,7 @@ export const ArrangerView: React.FC<ArrangerViewProps> = ({
   onSlotsChange,
   recordings,
   onDeleteRecording,
-  onAddRecording,
+  onAddRecordings,
   onRefreshRecordings,
   isScanning,
   shizukuActive
@@ -49,6 +51,40 @@ export const ArrangerView: React.FC<ArrangerViewProps> = ({
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(slots[0]?.id || null);
   const [activeScrubClip, setActiveScrubClip] = useState<RawRecording | null>(null);
   const [microAdjustSlot, setMicroAdjustSlot] = useState<ClipSlot | null>(null);
+  const [isProcessingFiles, setIsProcessingFiles] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Trigger native Android file picker for screen recordings
+  const handleOpenPicker = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+  // Process user selected video files from storage
+  const handleFilesSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setIsProcessingFiles(true);
+    const newItems: RawRecording[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (file.type.startsWith('video/') || file.name.endsWith('.mp4') || file.name.endsWith('.mkv')) {
+        const metadata = await extractVideoMetadata(file);
+        newItems.push(metadata);
+      }
+    }
+
+    if (newItems.length > 0) {
+      onAddRecordings(newItems);
+    }
+    setIsProcessingFiles(false);
+    // Reset input
+    e.target.value = '';
+  };
 
   // Assign a recording to the selected slot
   const handleAssignClip = (slotId: string, rec: RawRecording) => {
@@ -74,8 +110,9 @@ export const ArrangerView: React.FC<ArrangerViewProps> = ({
   // Auto-fill all empty slots in order from available successful takes
   const handleAutoFillWinningTakes = () => {
     const goodRecordings = recordings.filter((r) => !r.isFailAttempt);
-    let recIdx = 0;
+    if (goodRecordings.length === 0) return;
 
+    let recIdx = 0;
     const updated = slots.map((s) => {
       if (s.assignedClip || recIdx >= goodRecordings.length) return s;
       const rec = goodRecordings[recIdx++];
@@ -138,8 +175,18 @@ export const ArrangerView: React.FC<ArrangerViewProps> = ({
   };
 
   return (
-    <div className="flex flex-col gap-5 pb-24">
-      {/* Mode Switcher Tabs */}
+    <div className="flex flex-col gap-4 pb-24">
+      {/* Hidden file input for real video selection */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFilesSelected}
+        multiple
+        accept="video/mp4,video/*"
+        className="hidden"
+      />
+
+      {/* Editing Mode Selector Tabs */}
       <div className="flex items-center gap-1.5 p-1 bg-[#151A23] rounded-2xl border border-[#232B38]">
         <button
           onClick={() => onModeChange('basic')}
@@ -206,15 +253,17 @@ export const ArrangerView: React.FC<ArrangerViewProps> = ({
       <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between px-1">
           <div className="text-xs font-bold text-slate-400 tracking-wider">
-            TIMELINE SLOTS & CUTS ({slots.filter((s) => s.assignedClip).length}/{slots.length} FILLED)
+            TIMELINE SLOTS ({slots.filter((s) => s.assignedClip).length}/{slots.length} READY)
           </div>
-          <button
-            onClick={handleAutoFillWinningTakes}
-            className="text-xs font-semibold text-[#FED662] hover:underline flex items-center gap-1"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            Auto-Fill Winning Takes
-          </button>
+          {recordings.length > 0 && (
+            <button
+              onClick={handleAutoFillWinningTakes}
+              className="text-xs font-semibold text-[#FED662] hover:underline flex items-center gap-1"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              Auto-Fill Takes
+            </button>
+          )}
         </div>
 
         {slots.map((slot, index) => {
@@ -223,7 +272,7 @@ export const ArrangerView: React.FC<ArrangerViewProps> = ({
             <div
               key={slot.id}
               onClick={() => setSelectedSlotId(slot.id)}
-              className={`rounded-2xl p-4 border transition-all cursor-pointer flex flex-col gap-3 ${
+              className={`rounded-2xl p-3.5 border transition-all cursor-pointer flex flex-col gap-2.5 ${
                 isSelected
                   ? 'bg-[#151A23] border-[#FED662] shadow-lg shadow-[#FED662]/5'
                   : 'bg-[#12161E] border-[#232B38] hover:border-slate-700'
@@ -236,18 +285,18 @@ export const ArrangerView: React.FC<ArrangerViewProps> = ({
                     {index + 1}
                   </span>
                   <div>
-                    <h4 className="text-sm font-bold text-white">{slot.title}</h4>
-                    <p className="text-[11px] text-slate-400">{slot.subtitle}</p>
+                    <h4 className="text-xs font-bold text-white">{slot.title}</h4>
+                    <p className="text-[10px] text-slate-400">{slot.subtitle}</p>
                   </div>
                 </div>
 
                 {slot.assignedClip ? (
-                  <span className="text-xs font-bold text-[#00E5FF] px-2 py-0.5 rounded-md bg-[#00E5FF]/10 flex items-center gap-1">
+                  <span className="text-xs font-bold text-[#00E5FF] px-2 py-0.5 rounded-md bg-[#00E5FF]/10 flex items-center gap-1 font-mono">
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     {formatTimeMMSS(slot.effectiveCombatSec)}
                   </span>
                 ) : (
-                  <span className="text-xs font-medium text-amber-400 px-2 py-0.5 rounded-md bg-amber-400/10">
+                  <span className="text-[11px] font-semibold text-amber-400 px-2 py-0.5 rounded-md bg-amber-400/10">
                     Empty Slot
                   </span>
                 )}
@@ -261,15 +310,21 @@ export const ArrangerView: React.FC<ArrangerViewProps> = ({
                       e.stopPropagation();
                       setActiveScrubClip(slot.assignedClip);
                     }}
-                    className="relative w-16 h-12 rounded-lg overflow-hidden bg-slate-900 shrink-0 group cursor-pointer"
+                    className="relative w-16 h-12 rounded-lg overflow-hidden bg-slate-900 shrink-0 group cursor-pointer border border-[#232B38]"
                   >
-                    <img
-                      src={slot.assignedClip.thumbnailUrl}
-                      alt="Thumbnail"
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                    />
+                    {slot.assignedClip.thumbnailUrl ? (
+                      <img
+                        src={slot.assignedClip.thumbnailUrl}
+                        alt="Thumbnail"
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center bg-slate-900 text-slate-500">
+                        <Film className="w-5 h-5" />
+                      </div>
+                    )}
                     <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                      <Play className="w-4 h-4 text-white fill-white" />
+                      <Play className="w-3.5 h-3.5 text-white fill-white" />
                     </div>
                   </div>
 
@@ -277,7 +332,7 @@ export const ArrangerView: React.FC<ArrangerViewProps> = ({
                     <div className="text-xs font-semibold text-white truncate">
                       {slot.assignedClip.filename}
                     </div>
-                    <div className="text-[11px] text-slate-400 flex items-center gap-2 mt-0.5">
+                    <div className="text-[10px] text-slate-400 flex items-center gap-1.5 mt-0.5 font-mono">
                       <span>Cut: {formatTimeMMSS(slot.entryCutSec)} → {formatTimeMMSS(slot.tailCutSec)}</span>
                       <span>·</span>
                       <span className="text-slate-300">0.5s Black Fade</span>
@@ -290,8 +345,8 @@ export const ArrangerView: React.FC<ArrangerViewProps> = ({
                         e.stopPropagation();
                         setMicroAdjustSlot(slot);
                       }}
-                      className="p-2 rounded-lg bg-[#232B38] text-slate-300 hover:text-white"
-                      title="Adjust Trim Points"
+                      className="p-1.5 rounded-lg bg-[#232B38] text-slate-300 hover:text-white"
+                      title="Adjust In/Out Cut Points"
                     >
                       <Scissors className="w-3.5 h-3.5" />
                     </button>
@@ -303,7 +358,7 @@ export const ArrangerView: React.FC<ArrangerViewProps> = ({
                         );
                         onSlotsChange(updated);
                       }}
-                      className="p-2 rounded-lg bg-[#232B38] text-slate-400 hover:text-red-400"
+                      className="p-1.5 rounded-lg bg-[#232B38] text-slate-400 hover:text-red-400"
                       title="Clear Slot"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
@@ -311,8 +366,12 @@ export const ArrangerView: React.FC<ArrangerViewProps> = ({
                   </div>
                 </div>
               ) : (
-                <div className="border border-dashed border-[#232B38] rounded-xl p-3 flex items-center justify-center text-xs text-slate-500">
-                  Tap any recording below to assign to this slot
+                <div 
+                  onClick={handleOpenPicker}
+                  className="border border-dashed border-[#232B38] hover:border-[#FED662] rounded-xl p-3 flex items-center justify-center gap-2 text-xs text-slate-400 hover:text-white transition-colors cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5 text-[#FED662]" />
+                  <span>Tap to choose take from device or click a recording below</span>
                 </div>
               )}
 
@@ -331,16 +390,18 @@ export const ArrangerView: React.FC<ArrangerViewProps> = ({
                     </div>
                   </div>
 
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleSwapBgmTrack(slot.id);
-                    }}
-                    className="px-2.5 py-1 rounded-lg bg-[#0B0E14] border border-[#232B38] text-[11px] font-bold text-[#FED662] hover:border-[#FED662] flex items-center gap-1 shrink-0 ml-2"
-                  >
-                    <ArrowRightLeft className="w-3 h-3" />
-                    Swap Track
-                  </button>
+                  {slot.bgmAlternatives.length > 0 && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSwapBgmTrack(slot.id);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-[#0B0E14] border border-[#232B38] text-[11px] font-bold text-[#FED662] hover:border-[#FED662] flex items-center gap-1 shrink-0 ml-2"
+                    >
+                      <ArrowRightLeft className="w-3 h-3" />
+                      Swap
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -348,95 +409,115 @@ export const ArrangerView: React.FC<ArrangerViewProps> = ({
         })}
       </div>
 
-      {/* Recent Screen Recordings Filmstrip (From DCIM/ScreenRecorder) */}
+      {/* Screen Recordings Import & Filmstrip */}
       <div className="bg-[#151A23] rounded-2xl p-4 border border-[#232B38] flex flex-col gap-3">
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
-              <span>RECENT RECORDINGS</span>
+              <Film className="w-4 h-4 text-[#FED662]" />
+              <span>SCREEN RECORDINGS</span>
               <span className="text-[10px] px-1.5 py-0.2 rounded bg-[#232B38] text-slate-300 font-mono">
-                /sdcard/DCIM/ScreenRecorder
+                {recordings.length} Takes
               </span>
             </h3>
             <p className="text-[11px] text-slate-400 mt-0.5">
-              {shizukuActive ? '⚡ Shizuku ADB Direct Access' : 'MediaStore API Access'}
+              Select files from <code className="text-[#00E5FF]">/sdcard/DCIM/ScreenRecorder</code>
             </p>
           </div>
 
           <button
-            onClick={onRefreshRecordings}
-            disabled={isScanning}
-            className="p-2 rounded-xl bg-[#232B38] text-slate-300 hover:text-white disabled:opacity-50 flex items-center gap-1 text-xs"
+            onClick={handleOpenPicker}
+            disabled={isProcessingFiles}
+            className="px-3 py-1.5 rounded-xl bg-[#FED662] text-[#0B0E14] font-bold text-xs hover:brightness-110 flex items-center gap-1.5 transition-all shadow-md shadow-[#FED662]/10"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin text-[#FED662]' : ''}`} />
-            Refresh
+            <Upload className="w-3.5 h-3.5" />
+            <span>{isProcessingFiles ? 'Loading...' : 'Import Takes'}</span>
           </button>
         </div>
 
-        {/* Filmstrip Horizontal Carousel */}
-        <div className="flex gap-2.5 overflow-x-auto pb-2 pt-1">
-          {recordings.map((rec) => {
-            return (
-              <div
-                key={rec.id}
-                className={`w-36 rounded-xl p-2 bg-[#0B0E14] border shrink-0 flex flex-col gap-1.5 relative ${
-                  rec.isFailAttempt
-                    ? 'border-red-500/30 hover:border-red-500/60'
-                    : 'border-[#232B38] hover:border-[#FED662]'
-                }`}
-              >
-                {/* Thumbnail Preview */}
+        {/* Empty State or Recordings Carousel */}
+        {recordings.length === 0 ? (
+          <div 
+            onClick={handleOpenPicker}
+            className="border-2 border-dashed border-[#232B38] hover:border-[#FED662]/60 rounded-2xl p-6 flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors bg-[#0B0E14]/50"
+          >
+            <FolderOpen className="w-8 h-8 text-slate-500" />
+            <div className="text-xs font-bold text-slate-200">No screen recordings loaded yet</div>
+            <div className="text-[11px] text-slate-400 text-center max-w-xs">
+              Tap here to select your Genshin Abyss takes from storage. Failed takes (&lt;30s) are automatically triaged.
+            </div>
+          </div>
+        ) : (
+          <div className="flex gap-2.5 overflow-x-auto pb-2 pt-1">
+            {recordings.map((rec) => {
+              return (
                 <div
-                  onClick={() => setActiveScrubClip(rec)}
-                  className="relative aspect-video rounded-lg overflow-hidden bg-slate-900 cursor-pointer"
+                  key={rec.id}
+                  className={`w-36 rounded-xl p-2 bg-[#0B0E14] border shrink-0 flex flex-col gap-1.5 relative ${
+                    rec.isFailAttempt
+                      ? 'border-red-500/30 hover:border-red-500/60'
+                      : 'border-[#232B38] hover:border-[#FED662]'
+                  }`}
                 >
-                  <img src={rec.thumbnailUrl} alt={rec.filename} className="w-full h-full object-cover" />
-                  <span
-                    className={`absolute bottom-1 right-1 px-1 py-0.2 rounded text-[9px] font-bold ${
-                      rec.isFailAttempt ? 'bg-red-900/90 text-red-200' : 'bg-black/80 text-white'
-                    }`}
+                  {/* Thumbnail Preview */}
+                  <div
+                    onClick={() => setActiveScrubClip(rec)}
+                    className="relative aspect-video rounded-lg overflow-hidden bg-slate-900 cursor-pointer border border-[#232B38]"
                   >
-                    {formatTimeMMSS(rec.durationSec)}
-                  </span>
-                </div>
-
-                <div className="text-[11px] font-bold text-slate-300 truncate">
-                  {rec.timestamp}
-                </div>
-
-                {rec.isFailAttempt ? (
-                  <div className="flex items-center justify-between mt-1">
-                    <span className="text-[10px] text-red-400 font-semibold flex items-center gap-0.5">
-                      <AlertTriangle className="w-3 h-3" />
-                      Restart
-                    </span>
-                    <button
-                      onClick={() => onDeleteRecording(rec.id)}
-                      className="p-1 rounded bg-red-950/60 text-red-400 hover:bg-red-900 hover:text-white"
-                      title="Delete failed attempt from storage"
+                    {rec.thumbnailUrl ? (
+                      <img src={rec.thumbnailUrl} alt={rec.filename} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-slate-600">
+                        <Play className="w-4 h-4" />
+                      </div>
+                    )}
+                    <span
+                      className={`absolute bottom-1 right-1 px-1 py-0.2 rounded text-[9px] font-bold ${
+                        rec.isFailAttempt ? 'bg-red-900/90 text-red-200' : 'bg-black/80 text-white'
+                      }`}
                     >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
+                      {formatTimeMMSS(rec.durationSec)}
+                    </span>
                   </div>
-                ) : (
-                  <button
-                    onClick={() => {
-                      if (selectedSlotId) {
-                        handleAssignClip(selectedSlotId, rec);
-                      }
-                    }}
-                    className="w-full py-1 rounded bg-[#232B38] hover:bg-[#FED662] hover:text-[#0B0E14] text-[10px] font-bold text-slate-200 transition-colors mt-0.5"
-                  >
-                    Assign to Slot
-                  </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
+
+                  <div className="text-[11px] font-bold text-slate-300 truncate" title={rec.filename}>
+                    {rec.filename}
+                  </div>
+
+                  {rec.isFailAttempt ? (
+                    <div className="flex items-center justify-between mt-0.5">
+                      <span className="text-[10px] text-red-400 font-semibold flex items-center gap-0.5">
+                        <AlertTriangle className="w-3 h-3" />
+                        Restart
+                      </span>
+                      <button
+                        onClick={() => onDeleteRecording(rec.id)}
+                        className="p-1 rounded bg-red-950/60 text-red-400 hover:bg-red-900 hover:text-white"
+                        title="Remove failed take"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        if (selectedSlotId) {
+                          handleAssignClip(selectedSlotId, rec);
+                        }
+                      }}
+                      className="w-full py-1.5 rounded-lg bg-[#232B38] hover:bg-[#FED662] hover:text-[#0B0E14] text-[10px] font-bold text-slate-200 transition-colors mt-0.5"
+                    >
+                      Assign Take
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
-      {/* Video Scrubber Modal */}
+      {/* Real Video Player & Scrubber Modal */}
       {activeScrubClip && (
         <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
           <div className="bg-[#151A23] w-full max-w-md rounded-2xl border border-[#232B38] p-4 flex flex-col gap-3">
@@ -446,29 +527,36 @@ export const ArrangerView: React.FC<ArrangerViewProps> = ({
               </div>
               <button
                 onClick={() => setActiveScrubClip(null)}
-                className="text-xs text-slate-400 hover:text-white"
+                className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded bg-[#232B38]"
               >
                 Close
               </button>
             </div>
 
-            <div className="relative aspect-video rounded-xl overflow-hidden bg-black flex items-center justify-center">
-              <img
-                src={activeScrubClip.thumbnailUrl}
-                alt="Video Frame"
-                className="w-full h-full object-cover"
-              />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent flex flex-col justify-end p-3">
-                <div className="text-xs font-bold text-white flex items-center justify-between">
-                  <span>Victory Freeze Verification</span>
-                  <span className="font-mono text-[#FED662]">{formatTimeMMSS(activeScrubClip.durationSec)}</span>
-                </div>
-              </div>
+            <div className="relative aspect-video rounded-xl overflow-hidden bg-black flex items-center justify-center border border-[#232B38]">
+              {activeScrubClip.objectUrl ? (
+                <video
+                  src={activeScrubClip.objectUrl}
+                  controls
+                  playsInline
+                  autoPlay
+                  className="w-full h-full object-contain"
+                />
+              ) : activeScrubClip.thumbnailUrl ? (
+                <img
+                  src={activeScrubClip.thumbnailUrl}
+                  alt="Video Frame"
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="text-xs text-slate-500">Video preview</div>
+              )}
             </div>
 
-            <p className="text-[11px] text-slate-400 leading-relaxed">
-              Verified 3-Star clear: The 3-2-1 countdown on entrance and the post-combat victory screen are confirmed.
-            </p>
+            <div className="flex items-center justify-between text-xs text-slate-400 font-mono">
+              <span>Duration: {formatTimeMMSS(activeScrubClip.durationSec)}</span>
+              <span>Size: {activeScrubClip.fileSizeMb} MB</span>
+            </div>
 
             <button
               onClick={() => {
@@ -485,7 +573,7 @@ export const ArrangerView: React.FC<ArrangerViewProps> = ({
         </div>
       )}
 
-      {/* Micro-Adjust Trim Modal */}
+      {/* Micro-Adjust Cut Modal */}
       {microAdjustSlot && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-[#151A23] w-full max-w-sm rounded-2xl border border-[#232B38] p-4 flex flex-col gap-4">
@@ -493,11 +581,23 @@ export const ArrangerView: React.FC<ArrangerViewProps> = ({
               <h4 className="text-xs font-bold text-white">Micro-Adjust Cut Points</h4>
               <button
                 onClick={() => setMicroAdjustSlot(null)}
-                className="text-xs text-slate-400 hover:text-white"
+                className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded bg-[#232B38]"
               >
                 Done
               </button>
             </div>
+
+            {/* Video preview element if available */}
+            {microAdjustSlot.assignedClip?.objectUrl && (
+              <div className="aspect-video rounded-xl overflow-hidden bg-black border border-[#232B38]">
+                <video
+                  src={microAdjustSlot.assignedClip.objectUrl}
+                  controls
+                  playsInline
+                  className="w-full h-full object-contain"
+                />
+              </div>
+            )}
 
             {/* Entry Cut Slider */}
             <div>
@@ -535,7 +635,7 @@ export const ArrangerView: React.FC<ArrangerViewProps> = ({
                 >
                   -0.5s
                 </button>
-                <div className="flex-1 text-center text-xs text-slate-400">Clear Banner + 1.5s</div>
+                <div className="flex-1 text-center text-xs text-slate-400">Victory Screen + 1.5s</div>
                 <button
                   onClick={() => handleAdjustCut(microAdjustSlot.id, 'tail', +0.5)}
                   className="px-2.5 py-1 rounded bg-[#232B38] text-xs font-bold text-white"
