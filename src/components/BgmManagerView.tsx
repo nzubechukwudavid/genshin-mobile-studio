@@ -3,13 +3,20 @@ import { BgmTrack } from '../types';
 import { formatTimeMMSS } from '../services/trimmerEngine';
 import { extractAudioMetadata } from '../services/musicRecommender';
 import { autoScanMusic, isNativeAndroid } from '../services/nativeBridge';
-import { Music, Play, Pause, Folder, Plus, Volume2, Upload, Trash2, FolderOpen, RefreshCw } from 'lucide-react';
+import { Music, Play, Pause, Folder, Plus, Volume2, Upload, Trash2, FolderOpen, RefreshCw, ChevronDown } from 'lucide-react';
 
 interface BgmManagerViewProps {
   tracks: BgmTrack[];
   onAddTracks: (tracks: BgmTrack[]) => void;
   onDeleteTrack: (id: string) => void;
 }
+
+const COMMON_DIRECTORIES = [
+  { label: 'Entire Music Library (/sdcard/Music)', path: '/sdcard/Music' },
+  { label: 'Genshin OST (/sdcard/Music/Genshin Impact)', path: '/sdcard/Music/Genshin Impact' },
+  { label: 'NCS Music (/sdcard/Music/NCS Music)', path: '/sdcard/Music/NCS Music' },
+  { label: 'Downloads (/sdcard/Download)', path: '/sdcard/Download' }
+];
 
 export const BgmManagerView: React.FC<BgmManagerViewProps> = ({
   tracks,
@@ -19,39 +26,41 @@ export const BgmManagerView: React.FC<BgmManagerViewProps> = ({
   const [playingTrackId, setPlayingTrackId] = useState<string | null>(null);
   const [selectedFolder, setSelectedFolder] = useState<string>('all');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [customPath, setCustomPath] = useState<string>('/sdcard/Music');
+  const [showPathDropdown, setShowPathDropdown] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Auto-scan /sdcard/Music on mount if on native Android
+  // Auto-scan /sdcard/Music on mount if tracks are empty
   useEffect(() => {
     if (isNativeAndroid && tracks.length === 0) {
-      setIsProcessing(true);
-      autoScanMusic().then((scanned) => {
-        if (scanned && scanned.length > 0) {
-          onAddTracks(scanned);
-        }
-        setIsProcessing(false);
-      }).catch(() => setIsProcessing(false));
+      handleScanMusicFolder('/sdcard/Music');
     }
   }, []);
 
-  const handleScanMusicFolder = async () => {
+  const handleScanMusicFolder = async (targetPath: string = customPath) => {
     if (isNativeAndroid) {
       setIsProcessing(true);
-      const scanned = await autoScanMusic('/sdcard/Music');
-      if (scanned && scanned.length > 0) {
-        onAddTracks(scanned);
+      try {
+        const scanned = await autoScanMusic(targetPath);
+        if (scanned && scanned.length > 0) {
+          onAddTracks(scanned);
+        }
+      } catch (err) {
+        console.warn('Scan music error:', err);
+      } finally {
+        setIsProcessing(false);
       }
-      setIsProcessing(false);
       return;
     }
     fileInputRef.current?.click();
   };
 
   // Extract unique subfolders
-  const folders = ['all', ...Array.from(new Set(tracks.map((t) => t.folder)))];
+  const rawFolders = Array.from(new Set(tracks.map((t) => t.folder || 'Music')));
+  const folders = ['all', ...rawFolders];
 
   // Process user selected audio files
   const handleAudioFilesSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -63,7 +72,7 @@ export const BgmManagerView: React.FC<BgmManagerViewProps> = ({
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      if (file.type.startsWith('audio/') || file.name.endsWith('.mp3') || file.name.endsWith('.flac') || file.name.endsWith('.wav') || file.name.endsWith('.ogg')) {
+      if (file.type.startsWith('audio/') || file.name.endsWith('.mp3') || file.name.endsWith('.flac') || file.name.endsWith('.wav') || file.name.endsWith('.ogg') || file.name.endsWith('.m4a')) {
         const track = await extractAudioMetadata(file);
         newTracks.push(track);
       }
@@ -92,12 +101,13 @@ export const BgmManagerView: React.FC<BgmManagerViewProps> = ({
       if (track.audioUrl) {
         const audio = new Audio(track.audioUrl);
         audio.volume = 0.35; // Normalized audition volume
-        audio.play().catch(() => {});
+        audio.play().catch((err) => {
+          console.warn('Audio playback error:', err);
+        });
         audio.onended = () => setPlayingTrackId(null);
         currentAudioRef.current = audio;
         setPlayingTrackId(track.id);
       } else {
-        // Fallback test sound if raw audio URL not cached
         setPlayingTrackId(track.id);
         setTimeout(() => setPlayingTrackId(null), 1500);
       }
@@ -120,31 +130,19 @@ export const BgmManagerView: React.FC<BgmManagerViewProps> = ({
         className="hidden"
       />
 
-      {/* Hidden folder input for folder selection */}
-      <input
-        type="file"
-        ref={folderInputRef}
-        onChange={handleAudioFilesSelected}
-        multiple
-        // @ts-expect-error webkitdirectory is standard for desktop folder picking
-        webkitdirectory="true"
-        directory="true"
-        className="hidden"
-      />
-
       {/* Directory Status Header */}
       <div className="bg-[#151A23] rounded-2xl p-4 border border-[#232B38] flex flex-col gap-3">
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
               <Folder className="w-4 h-4 text-[#FED662]" />
-              <span>BGM LIBRARY</span>
+              <span>BGM LIBRARY CRAWLER</span>
               <span className="text-[10px] px-1.5 py-0.2 rounded bg-[#232B38] text-slate-300 font-mono">
                 {tracks.length} Tracks
               </span>
             </h3>
             <p className="text-[11px] text-slate-400 mt-0.5">
-              Import from <code className="text-[#00E5FF]">/sdcard/Music/**</code>
+              Recursive scanner for <code className="text-[#00E5FF]">{customPath}/**</code>
             </p>
           </div>
 
@@ -152,25 +150,68 @@ export const BgmManagerView: React.FC<BgmManagerViewProps> = ({
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={isProcessing}
-              className="px-3 py-1.5 rounded-xl bg-[#232B38] text-white text-xs font-bold hover:bg-[#2C3646] flex items-center gap-1.5"
+              className="px-2.5 py-1.5 rounded-xl bg-[#232B38] text-white text-xs font-bold hover:bg-[#2C3646] flex items-center gap-1.5"
             >
               <Upload className="w-3.5 h-3.5 text-[#FED662]" />
-              <span>Select Files</span>
+              <span className="hidden sm:inline">Pick Files</span>
             </button>
             <button
-              onClick={handleScanMusicFolder}
+              onClick={() => handleScanMusicFolder(customPath)}
               disabled={isProcessing}
               className="px-3 py-1.5 rounded-xl bg-[#FED662] text-[#0B0E14] text-xs font-black hover:brightness-110 flex items-center gap-1.5"
             >
-              <FolderOpen className="w-3.5 h-3.5" />
-              <span>{isProcessing ? 'Scanning...' : 'Scan /sdcard/Music'}</span>
+              <RefreshCw className={`w-3.5 h-3.5 ${isProcessing ? 'animate-spin' : ''}`} />
+              <span>{isProcessing ? 'Crawling...' : 'Scan Folder'}</span>
             </button>
           </div>
         </div>
 
+        {/* Path Selection / Custom Path Box */}
+        <div className="flex flex-col gap-1.5 pt-1 border-t border-[#232B38]">
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={customPath}
+              onChange={(e) => setCustomPath(e.target.value)}
+              placeholder="/sdcard/Music"
+              className="flex-1 bg-[#0B0E14] border border-[#232B38] rounded-xl px-3 py-1.5 text-xs text-white font-mono placeholder-slate-500 focus:outline-none focus:border-[#FED662]"
+            />
+            <button
+              onClick={() => setShowPathDropdown(!showPathDropdown)}
+              className="px-2 py-1.5 rounded-xl bg-[#232B38] text-slate-300 hover:text-white flex items-center gap-1 text-xs"
+              title="Common Folders"
+            >
+              <span>Presets</span>
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {showPathDropdown && (
+            <div className="bg-[#0B0E14] border border-[#232B38] rounded-xl p-1.5 flex flex-col gap-1 shadow-xl">
+              {COMMON_DIRECTORIES.map((dir) => (
+                <button
+                  key={dir.path}
+                  onClick={() => {
+                    setCustomPath(dir.path);
+                    setShowPathDropdown(false);
+                    handleScanMusicFolder(dir.path);
+                  }}
+                  className={`text-left px-2.5 py-1.5 rounded-lg text-xs transition-colors ${
+                    customPath === dir.path
+                      ? 'bg-[#FED662] text-[#0B0E14] font-bold'
+                      : 'text-slate-300 hover:bg-[#1A212D]'
+                  }`}
+                >
+                  {dir.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* Folder Filter Chips */}
         {folders.length > 1 && (
-          <div className="flex gap-1.5 overflow-x-auto pt-1">
+          <div className="flex gap-1.5 overflow-x-auto pt-1 no-scrollbar">
             {folders.map((f) => (
               <button
                 key={f}
@@ -181,7 +222,7 @@ export const BgmManagerView: React.FC<BgmManagerViewProps> = ({
                     : 'bg-[#0B0E14] text-slate-400 hover:text-white'
                 }`}
               >
-                {f === 'all' ? 'ALL SUBFOLDERS' : f.replace('Music/', '')}
+                {f === 'all' ? 'ALL SUBFOLDERS' : f}
               </button>
             ))}
           </div>
@@ -196,13 +237,13 @@ export const BgmManagerView: React.FC<BgmManagerViewProps> = ({
 
         {filteredTracks.length === 0 ? (
           <div 
-            onClick={() => fileInputRef.current?.click()}
-            className="border-2 border-dashed border-[#232B38] hover:border-[#FED662]/60 rounded-2xl p-8 flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors bg-[#0B0E14]/50"
+            onClick={() => handleScanMusicFolder(customPath)}
+            className="border-2 border-dashed border-[#232B38] hover:border-[#FED662]/60 rounded-2xl p-8 flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors bg-[#0B0E14]/50 text-center"
           >
             <Music className="w-8 h-8 text-slate-500" />
-            <div className="text-xs font-bold text-slate-200">No BGM tracks imported yet</div>
-            <div className="text-[11px] text-slate-400 text-center max-w-xs">
-              Tap here to select tracks from your phone's Music folder. The auto-arranger matches each track to chamber duration with zero duplicates.
+            <div className="text-xs font-bold text-slate-200">No BGM tracks indexed yet</div>
+            <div className="text-[11px] text-slate-400 max-w-xs">
+              Tap here to scan <code className="text-[#00E5FF]">{customPath}</code>. All subfolders are crawled recursively with zero manual imports needed.
             </div>
           </div>
         ) : (
@@ -228,7 +269,7 @@ export const BgmManagerView: React.FC<BgmManagerViewProps> = ({
                   <div className="min-w-0">
                     <div className="text-xs font-bold text-white truncate">{track.title}</div>
                     <div className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5">
-                      <span className="text-[#FED662] truncate max-w-[120px]">{track.folder.replace('Music/', '')}</span>
+                      <span className="text-[#FED662] truncate max-w-[130px]">{track.folder}</span>
                       <span>·</span>
                       <span
                         className={`px-1.5 py-0.2 rounded text-[9px] font-bold uppercase ${

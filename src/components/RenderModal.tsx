@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { ClipSlot } from '../types';
 import { calculateChapters, generateYouTubeDescription } from '../services/chapterGenerator';
 import { formatTimeMMSS } from '../services/trimmerEngine';
-import { saveRenderedVideoToGallery } from '../services/nativeBridge';
+import { saveRenderedVideoToGallery, executeShizukuScript } from '../services/nativeBridge';
 import { 
   CheckCircle2, 
   Download, 
@@ -13,7 +13,8 @@ import {
   RotateCcw, 
   Terminal, 
   Tv, 
-  FolderCheck 
+  FolderCheck,
+  Play
 } from 'lucide-react';
 
 interface RenderModalProps {
@@ -40,9 +41,14 @@ export const RenderModal: React.FC<RenderModalProps> = ({
   const [copiedDescription, setCopiedDescription] = useState(false);
   const [copiedShizukuCmd, setCopiedShizukuCmd] = useState(false);
 
-  // Gallery Save State
+  // Gallery Save State with Chunked Progress
   const [isSavingGallery, setIsSavingGallery] = useState(false);
+  const [saveProgress, setSaveProgress] = useState(0);
   const [savedGalleryPath, setSavedGalleryPath] = useState<string | null>(null);
+
+  // Direct Shizuku Hardware Execution State
+  const [isExecutingShizuku, setIsExecutingShizuku] = useState(false);
+  const [shizukuOutputMessage, setShizukuOutputMessage] = useState<string | null>(null);
 
   // Resolution Preset (Defaults to Xiaomi 13T Pro Native 2712x1220 @ 30fps)
   const [exportPreset, setExportPreset] = useState<ExportPreset>('native');
@@ -69,13 +75,13 @@ export const RenderModal: React.FC<RenderModalProps> = ({
     const lines = [
       '# Genshin Abyss Auto-Editor - Shizuku / ADB Hardware Concat Script',
       `# Dimensity 9200+ hardware H.264 encoder (${currentSpecs.label})`,
-      'mkdir -p /sdcard/DCIM/GenshinAbyssStudio'
+      'mkdir -p /sdcard/Movies/GenshinMobileStudio'
     ];
 
     validSlots.forEach((slot, idx) => {
       const clip = slot.assignedClip!;
       const bgm = slot.assignedBgm;
-      const outPart = `/sdcard/DCIM/GenshinAbyssStudio/part_${idx + 1}.mp4`;
+      const outPart = `/sdcard/Movies/GenshinMobileStudio/part_${idx + 1}.mp4`;
       const dur = slot.effectiveCombatSec.toFixed(2);
       const start = slot.entryCutSec.toFixed(2);
 
@@ -94,15 +100,15 @@ export const RenderModal: React.FC<RenderModalProps> = ({
 
     lines.push('');
     lines.push('# Create concat list and assemble final unified video');
-    lines.push('cat << \'EOF\' > /sdcard/DCIM/GenshinAbyssStudio/concat.txt');
+    lines.push('cat << \'EOF\' > /sdcard/Movies/GenshinMobileStudio/concat.txt');
     validSlots.forEach((_, idx) => {
       lines.push(`file 'part_${idx + 1}.mp4'`);
     });
     lines.push('EOF');
     lines.push(
-      'ffmpeg -y -f concat -safe 0 -i /sdcard/DCIM/GenshinAbyssStudio/concat.txt -c copy /sdcard/DCIM/GenshinAbyssStudio/Abyss_Floor12_Finished.mp4'
+      'ffmpeg -y -f concat -safe 0 -i /sdcard/Movies/GenshinMobileStudio/concat.txt -c copy /sdcard/Movies/GenshinMobileStudio/Abyss_Floor12_Master.mp4'
     );
-    lines.push('echo "✅ Render complete! Output: /sdcard/DCIM/GenshinAbyssStudio/Abyss_Floor12_Finished.mp4"');
+    lines.push('echo "✅ Render complete! Output: /sdcard/Movies/GenshinMobileStudio/Abyss_Floor12_Master.mp4"');
     return lines.join('\n');
   };
 
@@ -379,13 +385,29 @@ export const RenderModal: React.FC<RenderModalProps> = ({
     if (!rawOutputBlob) return;
     try {
       setIsSavingGallery(true);
+      setSaveProgress(0);
       const filename = `Abyss_Floor12_${exportPreset.toUpperCase()}_Showcase.mp4`;
-      const savedPath = await saveRenderedVideoToGallery(rawOutputBlob, filename);
+      const savedPath = await saveRenderedVideoToGallery(rawOutputBlob, filename, (pct) => {
+        setSaveProgress(pct);
+      });
       setSavedGalleryPath(savedPath);
       setIsSavingGallery(false);
     } catch (err: any) {
       setIsSavingGallery(false);
       setRenderError(`Failed to save to Gallery: ${err.message || err}`);
+    }
+  };
+
+  const handleExecuteShizuku = async () => {
+    try {
+      setIsExecutingShizuku(true);
+      setShizukuOutputMessage('Launching MediaCodec hardware encoder process via Shizuku binder...');
+      await executeShizukuScript(shizukuScript);
+      setShizukuOutputMessage('🚀 MediaCodec encoder running in background! Output target: /sdcard/Movies/GenshinMobileStudio/Abyss_Floor12_Master.mp4');
+    } catch (err: any) {
+      setShizukuOutputMessage(`❌ Execution failed: ${err.message || err}`);
+    } finally {
+      setIsExecutingShizuku(false);
     }
   };
 
@@ -533,29 +555,40 @@ export const RenderModal: React.FC<RenderModalProps> = ({
           ) : (
             /* Render Completed Screen */
             <div className="flex flex-col gap-3">
-              <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <CheckCircle2 className="w-6 h-6 text-emerald-400 shrink-0" />
-                  <div>
-                    <div className="text-xs font-bold text-emerald-300">
-                      Finished Video Ready ({renderedBlobSizeMb} MB)
-                    </div>
-                    <div className="text-[10px] text-emerald-400/80 font-mono">
-                      {currentSpecs.label} · Dual Normalization (-20dB SFX, -30dB BGM)
+              <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4 flex flex-col gap-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <CheckCircle2 className="w-6 h-6 text-emerald-400 shrink-0" />
+                    <div>
+                      <div className="text-xs font-bold text-emerald-300">
+                        Finished Video Ready ({renderedBlobSizeMb} MB)
+                      </div>
+                      <div className="text-[10px] text-emerald-400/80 font-mono">
+                        {currentSpecs.label} · Dual Normalization (-20dB SFX, -30dB BGM)
+                      </div>
                     </div>
                   </div>
+
+                  <button
+                    onClick={handleSaveToGallery}
+                    disabled={isSavingGallery}
+                    className="px-4 py-2.5 rounded-xl bg-emerald-500 text-[#0B0E14] text-xs font-black shadow-md hover:brightness-110 flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>
+                      {isSavingGallery ? `Saving (${saveProgress}%)...` : savedGalleryPath ? 'Saved!' : 'Save to Gallery'}
+                    </span>
+                  </button>
                 </div>
 
-                <button
-                  onClick={handleSaveToGallery}
-                  disabled={isSavingGallery}
-                  className="px-4 py-2.5 rounded-xl bg-emerald-500 text-[#0B0E14] text-xs font-black shadow-md hover:brightness-110 flex items-center gap-1.5 disabled:opacity-50"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>
-                    {isSavingGallery ? 'Saving...' : savedGalleryPath ? 'Saved to Gallery!' : 'Save to Gallery'}
-                  </span>
-                </button>
+                {isSavingGallery && (
+                  <div className="w-full bg-[#151A23] rounded-full h-1.5 overflow-hidden">
+                    <div
+                      className="h-full bg-emerald-400 transition-all duration-150"
+                      style={{ width: `${saveProgress}%` }}
+                    />
+                  </div>
+                )}
               </div>
 
               {savedGalleryPath && (
@@ -603,27 +636,44 @@ export const RenderModal: React.FC<RenderModalProps> = ({
 
           {/* Shizuku / Termux ADB Hardware Fast Path */}
           {shizukuActive && (
-            <div className="bg-[#151A23] rounded-2xl p-3 border border-[#232B38] flex flex-col gap-2">
+            <div className="bg-[#151A23] rounded-2xl p-3 border border-[#232B38] flex flex-col gap-2.5">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
                   <Terminal className="w-3.5 h-3.5 text-[#00E5FF]" />
-                  <span className="text-xs font-bold text-white">Shizuku Hardware Script</span>
+                  <span className="text-xs font-bold text-white">Shizuku Hardware Pipeline</span>
                   <span className="text-[9px] px-1.5 py-0.2 rounded bg-[#00E5FF]/20 text-[#00E5FF] font-bold">
                     Dimensity 9200+
                   </span>
                 </div>
 
-                <button
-                  onClick={handleCopyShizukuScript}
-                  className="px-2.5 py-1 rounded bg-[#232B38] text-[11px] font-semibold text-[#00E5FF] hover:bg-[#2C3646] flex items-center gap-1"
-                >
-                  <Copy className="w-3 h-3" />
-                  {copiedShizukuCmd ? 'Copied Script!' : 'Copy Script'}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleExecuteShizuku}
+                    disabled={isExecutingShizuku || validSlots.length === 0}
+                    className="px-2.5 py-1 rounded bg-[#00E5FF] text-[#0B0E14] text-xs font-black hover:brightness-110 flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <Play className="w-3 h-3 fill-[#0B0E14]" />
+                    <span>{isExecutingShizuku ? 'Executing...' : 'Run Shizuku'}</span>
+                  </button>
+
+                  <button
+                    onClick={handleCopyShizukuScript}
+                    className="px-2 py-1 rounded bg-[#232B38] text-[11px] font-semibold text-slate-300 hover:text-white flex items-center gap-1"
+                  >
+                    <Copy className="w-3 h-3" />
+                    <span>{copiedShizukuCmd ? 'Copied!' : 'Script'}</span>
+                  </button>
+                </div>
               </div>
 
+              {shizukuOutputMessage && (
+                <div className="p-2.5 rounded-xl bg-[#0B0E14] border border-[#00E5FF]/30 text-[11px] text-[#00E5FF] font-mono">
+                  {shizukuOutputMessage}
+                </div>
+              )}
+
               <p className="text-[10px] text-slate-400">
-                Execute directly in Shizuku Shell / Termux to utilize your Xiaomi 13T Pro's Dimensity 9200+ hardware MediaCodec encoder at 12x real-time speed.
+                Executes directly via Shizuku shell binder with MediaTek Dimensity 9200+ hardware MediaCodec encoder at ~12x real-time speed.
               </p>
             </div>
           )}

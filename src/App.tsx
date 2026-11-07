@@ -8,6 +8,13 @@ import {
 } from './types';
 import { INITIAL_RECORDINGS, createInitialSlots } from './services/trimmerEngine';
 import { DEFAULT_BGM_TRACKS, recommendBgmSuite } from './services/musicRecommender';
+import { 
+  checkAndRequestPermissions, 
+  checkAndRequestShizuku, 
+  autoScanRecordings, 
+  autoScanMusic, 
+  isNativeAndroid 
+} from './services/nativeBridge';
 import { TopHeader } from './components/TopHeader';
 import { BottomNavigation } from './components/BottomNavigation';
 import { ArrangerView } from './components/ArrangerView';
@@ -19,14 +26,44 @@ export default function App() {
   const [mode, setMode] = useState<EditingMode>('basic');
   const [stygianTopology, setStygianTopology] = useState<StygianTopology>('topology_2x2');
   
-  // Real user recordings and music tracks (empty by default)
+  // Real user recordings and music tracks
   const [recordings, setRecordings] = useState<RawRecording[]>(INITIAL_RECORDINGS);
   const [slots, setSlots] = useState<ClipSlot[]>(() => createInitialSlots('basic'));
   const [bgmTracks, setBgmTracks] = useState<BgmTrack[]>(DEFAULT_BGM_TRACKS);
   
   const [isScanning, setIsScanning] = useState(false);
-  const [shizukuActive, setShizukuActive] = useState(true); // User confirmed Shizuku is enabled on their Xiaomi 13T Pro
+  const [shizukuActive, setShizukuActive] = useState(false);
   const [isRenderModalOpen, setIsRenderModalOpen] = useState(false);
+
+  // Initialize native permissions, Shizuku, and auto-scan on startup
+  useEffect(() => {
+    async function initDevice() {
+      if (isNativeAndroid) {
+        setIsScanning(true);
+        // Prompt runtime permissions for media & storage
+        await checkAndRequestPermissions();
+
+        // Check Shizuku status
+        const shizukuStatus = await checkAndRequestShizuku();
+        setShizukuActive(shizukuStatus.isRunning && shizukuStatus.isGranted);
+
+        // Auto-scan recordings from ScreenRecorder
+        const recs = await autoScanRecordings('/sdcard/DCIM/ScreenRecorder');
+        if (recs && recs.length > 0) {
+          setRecordings(recs);
+        }
+
+        // Auto-scan music library from /sdcard/Music
+        const tracks = await autoScanMusic('/sdcard/Music');
+        if (tracks && tracks.length > 0) {
+          setBgmTracks(tracks);
+        }
+
+        setIsScanning(false);
+      }
+    }
+    initDevice();
+  }, []);
 
   // Re-initialize slots when mode changes
   const handleModeChange = (newMode: EditingMode) => {
@@ -76,12 +113,24 @@ export default function App() {
     setSlots((prev) => updateBgmAssignments(prev, bgmTracks));
   }, [updateBgmAssignments, bgmTracks]);
 
-  // Refresh trigger
-  const handleRefreshRecordings = () => {
+  // Full rescan trigger
+  const handleRefreshRecordings = async () => {
     setIsScanning(true);
-    setTimeout(() => {
-      setIsScanning(false);
-    }, 500);
+    if (isNativeAndroid) {
+      const [recs, tracks] = await Promise.all([
+        autoScanRecordings('/sdcard/DCIM/ScreenRecorder'),
+        autoScanMusic('/sdcard/Music')
+      ]);
+      if (recs && recs.length > 0) {
+        setRecordings(recs);
+      }
+      if (tracks && tracks.length > 0) {
+        setBgmTracks(tracks);
+      }
+      const shizukuStatus = await checkAndRequestShizuku();
+      setShizukuActive(shizukuStatus.isRunning && shizukuStatus.isGranted);
+    }
+    setIsScanning(false);
   };
 
   // Add newly imported real video recordings
@@ -130,7 +179,14 @@ export default function App() {
       {/* Top Mobile Header */}
       <TopHeader
         shizukuActive={shizukuActive}
-        onToggleShizuku={() => setShizukuActive(!shizukuActive)}
+        onToggleShizuku={async () => {
+          if (isNativeAndroid) {
+            const status = await checkAndRequestShizuku();
+            setShizukuActive(status.isRunning && status.isGranted);
+          } else {
+            setShizukuActive(!shizukuActive);
+          }
+        }}
         onRefresh={handleRefreshRecordings}
         isRefreshing={isScanning}
       />
@@ -172,7 +228,7 @@ export default function App() {
         totalSlotsCount={slots.length}
       />
 
-      {/* 1080p 60fps Video Assembly Modal */}
+      {/* 2712x1220 30fps Video Assembly Modal */}
       {isRenderModalOpen && (
         <RenderModal
           slots={slots}

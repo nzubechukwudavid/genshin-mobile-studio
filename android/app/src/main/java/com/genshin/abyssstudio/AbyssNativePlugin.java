@@ -1,6 +1,8 @@
 package com.genshin.abyssstudio;
 
+import android.Manifest;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.media.MediaMetadataRetriever;
@@ -8,8 +10,12 @@ import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
+import android.provider.Settings;
 import android.util.Base64;
 import android.util.Log;
+
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -18,10 +24,12 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.InputStreamReader;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -35,12 +43,64 @@ import rikka.shizuku.Shizuku;
 public class AbyssNativePlugin extends Plugin {
     private static final String TAG = "AbyssNative";
 
+    // Streaming video save state (prevents Out-Of-Memory on 1GB+ renders)
+    private FileOutputStream currentSaveStream = null;
+    private File currentSaveFile = null;
+
+    @PluginMethod
+    public void requestPermissions(PluginCall call) {
+        Context context = getContext();
+        List<String> needed = new ArrayList<>();
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) != PackageManager.PERMISSION_GRANTED) {
+                needed.add(Manifest.permission.READ_MEDIA_VIDEO);
+            }
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                needed.add(Manifest.permission.READ_MEDIA_AUDIO);
+            }
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED) {
+                needed.add(Manifest.permission.READ_MEDIA_IMAGES);
+            }
+        } else {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                needed.add(Manifest.permission.READ_EXTERNAL_STORAGE);
+            }
+        }
+
+        if (!needed.isEmpty() && getActivity() != null) {
+            ActivityCompat.requestPermissions(getActivity(), needed.toArray(new String[0]), 2001);
+        }
+
+        boolean allFilesGranted = true;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            allFilesGranted = Environment.isExternalStorageManager();
+            if (!allFilesGranted && getActivity() != null) {
+                try {
+                    Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                    intent.setData(Uri.parse("package:" + context.getPackageName()));
+                    getActivity().startActivity(intent);
+                } catch (Exception e) {
+                    try {
+                        Intent intent = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
+                        getActivity().startActivity(intent);
+                    } catch (Exception ignored) {}
+                }
+            }
+        }
+
+        JSObject res = new JSObject();
+        res.put("mediaGranted", needed.isEmpty());
+        res.put("allFilesGranted", allFilesGranted);
+        call.resolve(res);
+    }
+
     @PluginMethod
     public void scanRecordings(PluginCall call) {
         String customPath = call.getString("path", "/sdcard/DCIM/ScreenRecorder");
         File dir = new File(customPath);
 
-        // Fallback directory checks if default does not exist
+        // Fallback checks
         if (!dir.exists() || !dir.isDirectory()) {
             File alt1 = new File("/sdcard/Movies/Screenrecorder");
             File alt2 = new File("/sdcard/DCIM");
@@ -62,13 +122,14 @@ public class AbyssNativePlugin extends Plugin {
 
         File[] files = dir.listFiles((d, name) -> {
             String lower = name.toLowerCase(Locale.ROOT);
-            return lower.endsWith(".mp4") || lower.endsWith(".mkv") || lower.endsWith(".mov");
+            return (lower.endsWith(".mp4") || lower.endsWith(".mkv") || lower.endsWith(".mov")) && !name.startsWith(".");
         });
 
         if (files == null || files.length == 0) {
             JSObject ret = new JSObject();
             ret.put("recordings", new JSArray());
             ret.put("scannedPath", dir.getAbsolutePath());
+            ret.put("totalFound", 0);
             call.resolve(ret);
             return;
         }
@@ -82,7 +143,7 @@ public class AbyssNativePlugin extends Plugin {
         SimpleDateFormat timeFmt = new SimpleDateFormat("HH:mm", Locale.getDefault());
         MediaMetadataRetriever retriever = new MediaMetadataRetriever();
 
-        int maxProcess = Math.min(fileList.size(), 30);
+        int maxProcess = Math.min(fileList.size(), 40);
         for (int i = 0; i < maxProcess; i++) {
             File f = fileList.get(i);
             try {
@@ -97,13 +158,12 @@ public class AbyssNativePlugin extends Plugin {
                 int height = hStr != null ? Integer.parseInt(hStr) : 1220;
                 boolean isFail = durationSec < 30;
 
-                // Extract frame for preview thumbnail (10% into clip or at 2s)
+                // Extract frame thumbnail (at 2s or 10% into clip)
                 String thumbBase64 = "";
                 try {
                     long targetMicros = Math.min(durMs * 100, 2000000L);
                     Bitmap frame = retriever.getFrameAtTime(targetMicros, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
                     if (frame != null) {
-                        // Scale to 20:9 thumbnail 320x144
                         Bitmap thumb = Bitmap.createScaledBitmap(frame, 320, 144, true);
                         ByteArrayOutputStream baos = new ByteArrayOutputStream();
                         thumb.compress(Bitmap.CompressFormat.JPEG, 65, baos);
@@ -129,7 +189,6 @@ public class AbyssNativePlugin extends Plugin {
 
                 recordings.put(rec);
             } catch (Exception e) {
-                // Fallback entry if metadata retrieval fails
                 JSObject rec = new JSObject();
                 rec.put("id", "rec_" + f.lastModified() + "_" + i);
                 rec.put("filename", f.getName());
@@ -171,12 +230,12 @@ public class AbyssNativePlugin extends Plugin {
         }
 
         List<File> audioFiles = new ArrayList<>();
-        crawlMusicFiles(dir, audioFiles);
+        crawlMusicFiles(dir, audioFiles, 5, 0);
 
         JSArray tracks = new JSArray();
         MediaMetadataRetriever retriever = new MediaMetadataRetriever();
 
-        int maxProcess = Math.min(audioFiles.size(), 200);
+        int maxProcess = Math.min(audioFiles.size(), 300);
         for (int i = 0; i < maxProcess; i++) {
             File f = audioFiles.get(i);
             try {
@@ -186,8 +245,11 @@ public class AbyssNativePlugin extends Plugin {
                 String durStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
 
                 if (title == null || title.trim().isEmpty()) {
-                    title = f.getName().replaceFirst("[.][^.]+$", "").replace("_", " ");
+                    title = cleanTrackTitle(f.getName());
+                } else {
+                    title = cleanTrackTitle(title);
                 }
+
                 if (artist == null || artist.trim().isEmpty()) {
                     artist = "Genshin Impact OST";
                 }
@@ -195,14 +257,26 @@ public class AbyssNativePlugin extends Plugin {
                 long durMs = durStr != null ? Long.parseLong(durStr) : 120000;
                 int durationSec = (int) Math.round(durMs / 1000.0);
 
-                // Subfolder determination
-                String parentName = f.getParentFile() != null ? f.getParentFile().getName() : "Music";
+                // Compute relative folder name from rootPath
+                String relFolder = "Music";
+                try {
+                    String fullPath = f.getParentFile() != null ? f.getParentFile().getAbsolutePath() : "";
+                    if (fullPath.startsWith(dir.getAbsolutePath())) {
+                        String sub = fullPath.substring(dir.getAbsolutePath().length());
+                        if (sub.startsWith("/") || sub.startsWith("\\")) {
+                            sub = sub.substring(1);
+                        }
+                        if (!sub.isEmpty()) {
+                            relFolder = sub.replace("\\", "/");
+                        }
+                    }
+                } catch (Exception ignored) {}
 
-                String lower = title.toLowerCase(Locale.ROOT) + " " + parentName.toLowerCase(Locale.ROOT);
+                String lower = (title + " " + relFolder).toLowerCase(Locale.ROOT);
                 String energyHint = "general";
-                if (lower.contains("battle") || lower.contains("boss") || lower.contains("duel") || lower.contains("combat") || lower.contains("climax")) {
+                if (lower.contains("battle") || lower.contains("boss") || lower.contains("duel") || lower.contains("combat") || lower.contains("climax") || lower.contains("intense") || lower.contains("rock") || lower.contains("metal")) {
                     energyHint = "high";
-                } else if (lower.contains("chill") || lower.contains("peace") || lower.contains("town") || lower.contains("night") || lower.contains("soft")) {
+                } else if (lower.contains("chill") || lower.contains("peace") || lower.contains("town") || lower.contains("night") || lower.contains("soft") || lower.contains("relax") || lower.contains("teapot") || lower.contains("winery")) {
                     energyHint = "chill";
                 }
 
@@ -210,7 +284,7 @@ public class AbyssNativePlugin extends Plugin {
                 track.put("id", "bgm_" + f.lastModified() + "_" + i);
                 track.put("title", title);
                 track.put("artist", artist);
-                track.put("folder", parentName);
+                track.put("folder", relFolder);
                 track.put("durationSec", durationSec > 0 ? durationSec : 120);
                 track.put("energyHint", energyHint);
                 track.put("path", f.getAbsolutePath());
@@ -221,7 +295,7 @@ public class AbyssNativePlugin extends Plugin {
 
                 tracks.put(track);
             } catch (Exception e) {
-                String fallbackTitle = f.getName().replaceFirst("[.][^.]+$", "").replace("_", " ");
+                String fallbackTitle = cleanTrackTitle(f.getName());
                 JSObject track = new JSObject();
                 track.put("id", "bgm_" + f.lastModified() + "_" + i);
                 track.put("title", fallbackTitle);
@@ -249,14 +323,14 @@ public class AbyssNativePlugin extends Plugin {
         call.resolve(res);
     }
 
-    private void crawlMusicFiles(File dir, List<File> result) {
-        if (dir == null || !dir.exists() || !dir.isDirectory()) return;
+    private void crawlMusicFiles(File dir, List<File> result, int maxDepth, int currentDepth) {
+        if (dir == null || !dir.exists() || !dir.isDirectory() || currentDepth > maxDepth) return;
         File[] entries = dir.listFiles();
         if (entries == null) return;
 
         for (File entry : entries) {
-            if (entry.isDirectory() && !entry.getName().startsWith(".")) {
-                crawlMusicFiles(entry, result);
+            if (entry.isDirectory() && !entry.getName().startsWith(".") && !entry.getName().equalsIgnoreCase("Android")) {
+                crawlMusicFiles(entry, result, maxDepth, currentDepth + 1);
             } else if (entry.isFile()) {
                 String lower = entry.getName().toLowerCase(Locale.ROOT);
                 if (lower.endsWith(".mp3") || lower.endsWith(".m4a") || lower.endsWith(".flac") || lower.endsWith(".wav") || lower.endsWith(".ogg")) {
@@ -264,6 +338,13 @@ public class AbyssNativePlugin extends Plugin {
                 }
             }
         }
+    }
+
+    private String cleanTrackTitle(String name) {
+        String base = name.replaceFirst("[.][^.]+$", "");
+        return base.replaceAll("(?i)\\[NCS Release\\]|\\[NCS\\]|\\(Official Video\\)|\\(320k\\)|\\[320kbps\\]", "")
+                   .replace("_", " ")
+                   .trim();
     }
 
     @PluginMethod
@@ -308,22 +389,64 @@ public class AbyssNativePlugin extends Plugin {
     }
 
     @PluginMethod
-    public void saveVideoToGallery(PluginCall call) {
-        String base64Data = call.getString("base64Data", "");
-        String fileName = call.getString("fileName", "Abyss_Showcase_Rendered.mp4");
-
-        if (base64Data.isEmpty()) {
-            call.reject("base64Data is required");
+    public void executeShizukuCommand(PluginCall call) {
+        String script = call.getString("command", "");
+        if (script.isEmpty()) {
+            call.reject("command is required");
             return;
         }
 
         try {
-            // Strip data:video/mp4;base64, header if present
-            if (base64Data.contains(",")) {
-                base64Data = base64Data.substring(base64Data.indexOf(",") + 1);
+            if (!Shizuku.pingBinder()) {
+                call.reject("Shizuku is not running");
+                return;
+            }
+            if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+                call.reject("Shizuku permission not granted");
+                return;
             }
 
-            byte[] bytes = Base64.decode(base64Data, Base64.DEFAULT);
+            // Execute shell process via Shizuku
+            Process process = Shizuku.newProcess(new String[]{"sh", "-c", script}, null, null);
+
+            new Thread(() -> {
+                try {
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        Log.i(TAG, "[Shizuku-Out] " + line);
+                    }
+                    int code = process.waitFor();
+                    Log.i(TAG, "[Shizuku] Process finished with exit code: " + code);
+                } catch (Exception e) {
+                    Log.e(TAG, "[Shizuku-Err]", e);
+                }
+            }).start();
+
+            JSObject res = new JSObject();
+            res.put("started", true);
+            call.resolve(res);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed executing Shizuku command", e);
+            call.reject("Execution failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Chunked Video Saving Methods
+     * Prevents Android WebView out-of-memory crashes on large 1GB+ files
+     */
+    @PluginMethod
+    public void startSaveVideo(PluginCall call) {
+        String fileName = call.getString("fileName", "Abyss_Showcase_" + System.currentTimeMillis() + ".mp4");
+
+        try {
+            if (currentSaveStream != null) {
+                try {
+                    currentSaveStream.close();
+                } catch (Exception ignored) {}
+                currentSaveStream = null;
+            }
 
             File moviesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES);
             File outDir = new File(moviesDir, "GenshinMobileStudio");
@@ -331,27 +454,81 @@ public class AbyssNativePlugin extends Plugin {
                 outDir.mkdirs();
             }
 
-            File targetFile = new File(outDir, fileName);
-            FileOutputStream fos = new FileOutputStream(targetFile);
-            fos.write(bytes);
-            fos.flush();
-            fos.close();
+            currentSaveFile = new File(outDir, fileName);
+            currentSaveStream = new FileOutputStream(currentSaveFile, false);
 
-            // Notify Android MediaStore scanner so it instantly shows in Xiaomi Gallery
+            JSObject res = new JSObject();
+            res.put("started", true);
+            res.put("targetPath", currentSaveFile.getAbsolutePath());
+            call.resolve(res);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed starting chunked video save", e);
+            call.reject("Start save failed: " + e.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void appendVideoChunk(PluginCall call) {
+        String chunkBase64 = call.getString("chunkBase64", "");
+        if (chunkBase64.isEmpty()) {
+            call.resolve();
+            return;
+        }
+
+        try {
+            if (currentSaveStream == null) {
+                call.reject("Video stream not started. Call startSaveVideo first.");
+                return;
+            }
+
+            if (chunkBase64.contains(",")) {
+                chunkBase64 = chunkBase64.substring(chunkBase64.indexOf(",") + 1);
+            }
+
+            byte[] bytes = Base64.decode(chunkBase64, Base64.NO_WRAP);
+            currentSaveStream.write(bytes);
+
+            JSObject res = new JSObject();
+            res.put("bytesWritten", bytes.length);
+            call.resolve(res);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed appending video chunk", e);
+            call.reject("Append chunk failed: " + e.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void finishSaveVideo(PluginCall call) {
+        try {
+            if (currentSaveStream != null) {
+                currentSaveStream.flush();
+                currentSaveStream.close();
+                currentSaveStream = null;
+            }
+
+            if (currentSaveFile == null || !currentSaveFile.exists()) {
+                call.reject("Target file does not exist");
+                return;
+            }
+
+            String savedPath = currentSaveFile.getAbsolutePath();
+
+            // Trigger MediaScanner so it instantly shows in Xiaomi Gallery
             MediaScannerConnection.scanFile(
                 getContext(),
-                new String[]{targetFile.getAbsolutePath()},
+                new String[]{savedPath},
                 new String[]{"video/mp4"},
                 (path, uri) -> Log.i(TAG, "MediaScanner indexed: " + path + " -> " + uri)
             );
 
             JSObject res = new JSObject();
             res.put("success", true);
-            res.put("savedPath", targetFile.getAbsolutePath());
+            res.put("savedPath", savedPath);
+            res.put("fileSizeMb", Math.round((currentSaveFile.length() / (1024.0 * 1024.0)) * 10.0) / 10.0);
             call.resolve(res);
         } catch (Exception e) {
-            Log.e(TAG, "Failed saving video to gallery", e);
-            call.reject("Save failed: " + e.getMessage());
+            Log.e(TAG, "Failed finishing video save", e);
+            call.reject("Finish save failed: " + e.getMessage());
         }
     }
 }
