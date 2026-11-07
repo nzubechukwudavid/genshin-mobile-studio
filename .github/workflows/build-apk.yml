@@ -48,8 +48,7 @@ jobs:
 
       - name: Build Debug APK with Gradle
         run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-36"
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1 || true
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
