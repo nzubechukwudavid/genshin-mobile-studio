@@ -406,8 +406,14 @@ public class AbyssNativePlugin extends Plugin {
                 return;
             }
 
-            // Execute shell process via Shizuku
-            Process process = Shizuku.newProcess(new String[]{"sh", "-c", script}, null, null);
+            // Execute shell process via Shizuku reflection or fallback
+            Process process = null;
+            try {
+                java.lang.reflect.Method m = Shizuku.class.getMethod("newProcess", String[].class, String[].class, String.class);
+                process = (Process) m.invoke(null, new String[]{"sh", "-c", script}, null, null);
+            } catch (Throwable t) {
+                process = Runtime.getRuntime().exec(new String[]{"sh", "-c", script});
+            }
 
             new Thread(() -> {
                 try {

@@ -24,8 +24,11 @@ public class MainActivity extends BridgeActivity {
     private static final String TAG = "MainActivity";
     private static final int PERMISSION_REQ_CODE = 2001;
 
-    private final Shizuku.OnRequestPermissionResultListener shizukuListener = (requestCode, grantResult) -> {
-        Log.i(TAG, "Shizuku permission result: req=" + requestCode + ", res=" + grantResult);
+    private final Shizuku.OnRequestPermissionResultListener shizukuListener = new Shizuku.OnRequestPermissionResultListener() {
+        @Override
+        public void onRequestPermissionResult(int requestCode, int grantResult) {
+            Log.i(TAG, "Shizuku permission result: req=" + requestCode + ", res=" + grantResult);
+        }
     };
 
     @Override
