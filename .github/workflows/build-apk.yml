@@ -51,7 +51,16 @@ jobs:
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload Gradle Build Error Report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-reports
+          path: |
+            android/app/build/reports/
+            android/app/build/outputs/logs/
 
       - name: Prepare Release APK Asset
         run: |
